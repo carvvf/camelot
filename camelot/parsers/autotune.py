@@ -1932,12 +1932,12 @@ class Autotune:
         if isinstance(jc_score_value, float) and jc_score_value != jc_score_value:
             jc_score_value = None
 
-        accuracy_under_min = accuracy is None or accuracy < 10
-        jc_under_min = jc_score_value is None or jc_score_value < 10
+        accuracy_under_min = accuracy is None or accuracy < 1
+        jc_under_min = jc_score_value is None or jc_score_value < 1
         if accuracy_under_min or jc_under_min:
             Autotune._log_pruning_skip(
                 table,
-                "accuracy or jc_accuracy missing or < 10",
+                "accuracy or jc_accuracy missing or < 1",
                 rows=rows,
                 cols=cols,
                 accuracy=accuracy,

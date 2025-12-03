@@ -10,6 +10,7 @@ from pdfminer.pdfinterp import PDFResourceManager
 from pdfminer.pdfpage import PDFPage
 
 from camelot.utils import bbox_intersection_area
+from camelot.utils import text_strip
 
 
 def get_text_from_pdf(filename):
@@ -43,3 +44,9 @@ def test_bbox_intersection_text(testdir):
     pdftextelement2 = get_text_from_pdf(filename2)
 
     assert bbox_intersection_area(pdftextelement1, pdftextelement2) == 0.0
+
+
+def test_text_strip_replaces_private_use_chars():
+    text = "14.30 \uf0b8 15.30"
+    assert text_strip(text) == "14.30 ÷ 15.30"
+

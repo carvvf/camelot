@@ -21,12 +21,23 @@ __version__ = get_version()
 # set up logging
 logger = logging.getLogger("camelot")
 
-format_string = "%(asctime)s - %(levelname)s - %(message)s"
+format_string = "%(asctime)s %(levelname)s: %(message)s"
 formatter = logging.Formatter(format_string, datefmt="%Y-%m-%dT%H:%M:%S")
 handler = logging.StreamHandler()
 handler.setFormatter(formatter)
 
 logger.addHandler(handler)
+
+
+def _camelot_formatwarning(message, category, filename, lineno, line=None):
+    # Drop the line number while keeping a consistent format.
+    return f"{filename} {category.__name__}: {message}\n"
+
+
+# Use a warning formatter that omits line numbers.
+import warnings
+
+warnings.formatwarning = _camelot_formatwarning
 
 # instantiate plot method
 plot = PlotMethods()

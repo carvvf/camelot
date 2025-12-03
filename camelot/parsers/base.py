@@ -4,10 +4,14 @@ import logging
 import math
 import os
 import warnings
+from datetime import datetime
+from typing import Any
 
 import pandas as pd
 
 from ..core import Table
+from pdfminer.layout import LTTextLineHorizontal
+from pdfminer.layout import LTTextLineVertical
 from ..utils import bbox_from_str
 from ..utils import compute_accuracy
 from ..utils import compute_whitespace
@@ -48,6 +52,9 @@ class BaseParser:
 
         self.rootname = None
         self.t_bbox = None
+        self.page_rotation = 0
+        self.source_filepath = None
+        self.page_rotation_pdfinfo = None
 
         # For plotting details of parsing algorithms
         self.resolution = 300  # default plotting resolution of the PDF.
@@ -74,10 +81,22 @@ class BaseParser:
         images,
         horizontal_text,
         vertical_text,
+        *,
+        rotation: int = 0,
         layout_kwargs,
+        source_filepath=None,
+        source_page_rotation=None,
     ):
         """Prepare the page for parsing."""
-        self.filename = filename
+        self.filename = os.fsdecode(filename)
+        if source_filepath is None:
+            source_candidate = self.filename
+        else:
+            source_candidate = os.fsdecode(source_filepath)
+        if source_candidate:
+            self.source_filepath = os.path.abspath(source_candidate)
+        else:
+            self.source_filepath = None
         self.layout_kwargs = layout_kwargs
         self.layout = layout
         self.dimensions = dimensions
@@ -86,6 +105,18 @@ class BaseParser:
         self.horizontal_text = horizontal_text
         self.vertical_text = vertical_text
         self.pdf_width, self.pdf_height = self.dimensions
+        rotation_mod = int(rotation) % 360
+        if rotation_mod not in (0, 90, 180, 270):
+            raise ValueError(
+                f"Unsupported normalized rotation angle: {rotation_mod} degrees."
+            )
+        self.page_rotation = rotation_mod
+        try:
+            self.page_rotation_pdfinfo = (
+                int(source_page_rotation) if source_page_rotation is not None else None
+            )
+        except (TypeError, ValueError):
+            self.page_rotation_pdfinfo = None
         self.rootname, __ = os.path.splitext(self.filename)
 
         if self.parse_details is not None:
@@ -125,13 +156,22 @@ class BaseParser:
         if not self.horizontal_text:
             rootname = os.path.basename(self.rootname)
             if self.images:
-                warnings.warn(
+                warning_timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                warnings.warn_explicit(
                     f"{rootname} is image-based, "
                     "camelot only works on text-based pages.",
-                    stacklevel=1,
+                    category=UserWarning,
+                    filename=warning_timestamp,
+                    lineno=0,
                 )
             else:
-                warnings.warn(f"No tables found on {rootname}", stacklevel=2)
+                warning_timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                warnings.warn_explicit(
+                    f"No tables found on {rootname}",
+                    category=UserWarning,
+                    filename=warning_timestamp,
+                    lineno=0,
+                )
             return True
         return False
 
@@ -158,6 +198,7 @@ class BaseParser:
         table.page = self.page
         table.order = table_idx + 1
         table._bbox = bbox
+        table.rotation = self.page_rotation
         return table
 
     @staticmethod
@@ -205,6 +246,83 @@ class BaseParser:
                             table.cells[r_idx][c_idx].text = text
         return pos_errors
 
+    def _merge_split_prefix_letters(self, table: Table) -> None:
+        """Reorder single-letter fragments that PDF renders as separate textlines."""
+        if not self.horizontal_text:
+            return
+
+        tolerance = 1.0
+        combined_lines = []
+        if self.horizontal_text:
+            combined_lines.extend(self.horizontal_text)
+        if self.vertical_text:
+            combined_lines.extend(self.vertical_text)
+
+        # Bucket textlines by row band to avoid scanning all textlines per cell.
+        row_buckets: list[list[Any]] = [[] for _ in table.rows]
+        for textline in combined_lines:
+            try:
+                x0, y0, x1, y1 = textline.bbox
+            except Exception:
+                continue
+            y_center = (y0 + y1) / 2.0
+            for idx, row in enumerate(table.rows):
+                row_bottom, row_top = row
+                if (row_top - tolerance) <= y_center <= (row_bottom + tolerance):
+                    row_buckets[idx].append(textline)
+                    break
+
+        for row_idx, row in enumerate(table.cells):
+            for cell in row:
+                segments: list[tuple[float, float, str]] = []
+                candidate_lines = (
+                    row_buckets[row_idx] if row_idx < len(row_buckets) else combined_lines
+                )
+                for textline in candidate_lines:
+                    if not isinstance(textline, (LTTextLineHorizontal, LTTextLineVertical)):
+                        continue
+                    x0, y0, x1, y1 = textline.bbox
+                    if (
+                        x1 < cell.x1 - tolerance
+                        or x0 > cell.x2 + tolerance
+                        or y1 < cell.y1 - tolerance
+                        or y0 > cell.y2 + tolerance
+                    ):
+                        continue
+                    x_center = (x0 + x1) / 2.0
+                    y_center = (y0 + y1) / 2.0
+                    if (
+                        x_center < cell.x1 - tolerance
+                        or x_center > cell.x2 + tolerance
+                        or y_center < cell.y1 - tolerance
+                        or y_center > cell.y2 + tolerance
+                    ):
+                        continue
+                    text = textline.get_text()
+                    stripped = text.strip()
+                    if not stripped:
+                        continue
+                    if len(stripped) == 1:
+                        segments.append((y1, x0, stripped))
+                    else:
+                        segments.append((y1, x0, text))
+
+                if len(segments) < 2 or not any(len(seg[2]) == 1 for seg in segments):
+                    continue
+
+                segments.sort(key=lambda item: (-item[0], item[1]))
+                leftmost = segments[0]
+                left_letter = leftmost[2]
+                if len(left_letter) != 1:
+                    continue
+                existing = cell.text.lstrip()
+                if existing.startswith(left_letter):
+                    continue
+
+                combined = "".join(seg[2] for seg in segments)
+                if combined and combined != cell.text:
+                    cell._text = combined
+
     def _generate_columns_and_rows(self, bbox, user_cols):
         # Pure virtual, must be defined by the derived parser
         raise NotImplementedError()
@@ -241,6 +359,14 @@ class BaseParser:
 
             cols, rows, v_s, h_s = self._generate_columns_and_rows(bbox, user_cols)
             table = self._generate_table(table_idx, bbox, cols, rows, v_s=v_s, h_s=h_s)
+            if getattr(table, "_has_cid_placeholders", False):
+                table_label = f"table-p{table.page}-o{table.order}"
+                logger.warning(
+                    "Skipping %s (bbox=%s) due to unresolved CID glyphs",
+                    table_label,
+                    bbox,
+                )
+                continue
             _tables.append(table)
 
         return _tables
@@ -249,6 +375,8 @@ class BaseParser:
         """Record data about the origin of the table."""
         table.flavor = self.id
         table.filename = self.filename
+        table.source = self.source_filepath or self.filename
+        table.pdfinfo_rotation = self.page_rotation_pdfinfo
         if table._bbox in self.table_bbox_parses:
             table.parse = self.table_bbox_parses[table._bbox]
         else:
@@ -261,10 +389,14 @@ class BaseParser:
             return
         table.parse_details = self.parse_details
         pos_errors = self.compute_parse_errors(table)
+        self._merge_split_prefix_letters(table)
         table.accuracy = compute_accuracy([[100, pos_errors]])
 
         if self.copy_text is not None:
             table.copy_spanning_text(self.copy_text)
+
+        if table.flavor == "lattice":
+            table.rebuild_spanning_cells()
 
         data = table.data
         table.df = pd.DataFrame(data)
@@ -333,7 +465,7 @@ class TextBaseParser(BaseParser):
         """
         row_y = None
         rows = []
-        temp = []
+        temp: list[Any] = []
         text.sort(key=lambda x: (-x.y0, x.x0))
         non_empty_text = [t for t in text if t.get_text().strip()]
         for t in non_empty_text:
@@ -344,13 +476,15 @@ class TextBaseParser(BaseParser):
             if row_y is None:
                 row_y = t.y0
             elif not math.isclose(row_y, t.y0, abs_tol=row_tol):
-                rows.append(sorted(temp, key=lambda t: t.x0))
+                if temp:
+                    rows.append(sorted(temp, key=lambda t: t.x0))
                 temp = []
                 # We update the row's bottom as we go, to be forgiving if there
                 # is a gradual change across multiple columns.
                 row_y = t.y0
             temp.append(t)
-        rows.append(sorted(temp, key=lambda t: t.x0))
+        if temp:
+            rows.append(sorted(temp, key=lambda t: t.x0))
         return rows
 
     @staticmethod
@@ -417,8 +551,12 @@ class TextBaseParser(BaseParser):
             List of continuous row y-coordinate tuples.
 
         """
+        filtered_groups = [r for r in rows_grouped if r]
+        if not filtered_groups:
+            return []
+
         row_boundaries = [
-            [max(t.y1 for t in r), min(t.y0 for t in r)] for r in rows_grouped
+            [max(t.y1 for t in r), min(t.y0 for t in r)] for r in filtered_groups
         ]
         for i in range(0, len(row_boundaries) - 1):
             top_row = row_boundaries[i]

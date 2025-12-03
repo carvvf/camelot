@@ -42,6 +42,7 @@ docs/_build/
 # vscode
 .vscode
 .env
+.venv/
 changelog.txt
 
 # Jupyter Notebook

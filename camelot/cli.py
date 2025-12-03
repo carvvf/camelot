@@ -72,8 +72,16 @@ pass_config = click.make_pass_decorator(Config)
 @click.option(
     "-f",
     "--format",
-    type=click.Choice(["csv", "excel", "html", "json", "markdown", "sqlite"]),
-    help="Output file format.",
+    type=click.Choice([
+        "csv",
+        "excel",
+        "html",
+        "json",
+        "json-coords",
+        "markdown",
+        "sqlite",
+    ]),
+    help="Output file format. Use 'json-coords' for bounding boxes metadata.",
 )
 @click.option("-z", "--zip", is_flag=True, help="Create ZIP archive.")
 @click.option(
@@ -81,6 +89,13 @@ pass_config = click.make_pass_decorator(Config)
     "--split_text",
     is_flag=True,
     help="Split text that spans across multiple cells.",
+)
+@click.option(
+    "--json-coords",
+    "json_coords",
+    is_flag=True,
+    default=False,
+    help="Shortcut to force --format json-coords.",
 )
 @click.option(
     "-flag",
@@ -103,7 +118,20 @@ pass_config = click.make_pass_decorator(Config)
 )
 @click.pass_context
 def cli(ctx, *args, **kwargs):
-    """Camelot: PDF Table Extraction for Humans."""
+    """Camelot: PDF Table Extraction for Humans.
+
+    ### Custom build extras: ##############################################
+    
+      • `--format json-coords` exports bounding boxes metadata, and
+      flavor details for each detected table.
+
+      • Supplementary QA scripts prefixed `jc-` under `tests/` help visualise
+      extraction results when working with the custom distribution.
+
+    See jc-config.debug.env for more options.
+
+    #######################################################################
+    """
     ctx.obj = Config()
     for key, value in kwargs.items():
         ctx.obj.set_config(key, value)
@@ -128,6 +156,16 @@ def cli(ctx, *args, **kwargs):
 )
 @click.option(
     "-back", "--process_background", is_flag=True, help="Process background lines."
+)
+@click.option(
+    "--remove_background_artifacts/--no-remove_background_artifacts",
+    default=True,
+    help="Remove background images that overlap detected table areas (enabled by default).",
+)
+@click.option(
+    "--remove_text/--no-remove_text",
+    default=False,
+    help="Mask text glyphs inside candidate table areas before detecting grid lines.",
 )
 @click.option(
     "-scale",
@@ -207,6 +245,7 @@ def lattice(c, *args, **kwargs):
     pages = conf.pop("pages")
     output = conf.pop("output")
     f = conf.pop("format")
+    json_coords = conf.pop("json_coords", False)
     compress = conf.pop("zip")
     quiet = conf.pop("quiet")
     plot_type = kwargs.pop("plot_type")
@@ -221,6 +260,13 @@ def lattice(c, *args, **kwargs):
     kwargs["copy_text"] = None if not copy_text else copy_text
     kwargs["shift_text"] = list(kwargs["shift_text"])
 
+    if json_coords:
+        if f not in (None, "json-coords"):
+            raise click.UsageError(
+                "--json-coords cannot be combined with a different --format"
+            )
+        f = "json-coords"
+
     if plot_type is not None:
         if not _HAS_MPL:
             raise ImportError("matplotlib is required for plotting.")
@@ -232,6 +278,158 @@ def lattice(c, *args, **kwargs):
 
     tables = read_pdf(
         filepath, pages=pages, flavor="lattice", suppress_stdout=quiet, **kwargs
+    )
+    click.echo(f"Found {tables.n} tables")
+    if plot_type is not None:
+        for table in tables:
+            plot(table, kind=plot_type)
+            plt.show()
+    else:
+        tables.export(output, f=f, compress=compress)
+
+
+@cli.command("autotune")
+@click.option(
+    "-R",
+    "--table_regions",
+    default=[],
+    multiple=True,
+    help="Page regions to analyze. Example: x1,y1,x2,y2"
+    " where x1, y1 -> left-top and x2, y2 -> right-bottom.",
+)
+@click.option(
+    "-T",
+    "--table_areas",
+    default=[],
+    multiple=True,
+    help="Table areas to process. Example: x1,y1,x2,y2"
+    " where x1, y1 -> left-top and x2, y2 -> right-bottom.",
+)
+@click.option(
+    "--remove_background_artifacts/--no-remove_background_artifacts",
+    default=True,
+    help="Remove background images that overlap detected table areas (enabled by default).",
+)
+@click.option(
+    "--remove_text/--no-remove_text",
+    default=False,
+    help="Mask text glyphs inside candidate table areas before detecting grid lines.",
+)
+@click.option(
+    "-scale",
+    "--line_scale",
+    default=60,
+    help="Line size scaling factor. The larger the value,"
+    " the smaller the detected lines.",
+)
+@click.option(
+    "-copy",
+    "--copy_text",
+    default=[],
+    type=click.Choice(["h", "v"]),
+    multiple=True,
+    help="Direction in which text in a spanning cell" " will be copied over.",
+)
+@click.option(
+    "-shift",
+    "--shift_text",
+    default=["l", "t"],
+    type=click.Choice(["", "l", "r", "t", "b"]),
+    multiple=True,
+    help="Direction in which text in a spanning cell will flow.",
+)
+@click.option(
+    "-l",
+    "--line_tol",
+    default=2,
+    help="Tolerance parameter used to merge close vertical" " and horizontal lines.",
+)
+@click.option(
+    "-j",
+    "--joint_tol",
+    default=2,
+    help="Tolerance parameter used to decide whether"
+    " the detected lines and points lie close to each other.",
+)
+@click.option(
+    "-block",
+    "--threshold_blocksize",
+    default=15,
+    help="For adaptive thresholding, size of a pixel"
+    " neighborhood that is used to calculate a threshold value for"
+    " the pixel. Example: 3, 5, 7, and so on.",
+)
+@click.option(
+    "-const",
+    "--threshold_constant",
+    default=-2,
+    help="For adaptive thresholding, constant subtracted"
+    " from the mean or weighted mean. Normally, it is positive but"
+    " may be zero or negative as well.",
+)
+@click.option(
+    "-I",
+    "--iterations",
+    default=0,
+    help="Number of times for erosion/dilation will be applied.",
+)
+@click.option(
+    "-res",
+    "--resolution",
+    default=400,
+    help="Resolution used for PDF to PNG conversion.",
+)
+@click.option(
+    "-plot",
+    "--plot_type",
+    type=click.Choice(["text", "grid", "contour", "joint", "line"]),
+    help="Plot elements found on PDF page for visual debugging.",
+)
+@click.argument("filepath", type=click.Path(exists=True))
+@pass_config
+def autotune(c, *args, **kwargs):
+    """Autotune: run lattice (with/without background), stream and network, then merge results."""
+    conf = c.config
+    pages = conf.pop("pages")
+    output = conf.pop("output")
+    f = conf.pop("format")
+    json_coords = conf.pop("json_coords", False)
+    compress = conf.pop("zip")
+    quiet = conf.pop("quiet")
+    plot_type = kwargs.pop("plot_type")
+    filepath = kwargs.pop("filepath")
+    kwargs.update(conf)
+
+    table_regions = list(kwargs["table_regions"])
+    kwargs["table_regions"] = None if not table_regions else table_regions
+    table_areas = list(kwargs["table_areas"])
+    kwargs["table_areas"] = None if not table_areas else table_areas
+    copy_text = list(kwargs["copy_text"])
+    kwargs["copy_text"] = None if not copy_text else copy_text
+    kwargs["shift_text"] = list(kwargs["shift_text"])
+
+    if json_coords:
+        if f not in (None, "json-coords"):
+            raise click.UsageError(
+                "--json-coords cannot be combined with a different --format"
+            )
+        f = "json-coords"
+
+    if plot_type is not None:
+        if not _HAS_MPL:
+            raise ImportError("matplotlib is required for plotting.")
+    else:
+        if output is None:
+            raise click.UsageError("Please specify output file path using --output")
+        if f is None:
+            raise click.UsageError("Please specify output file format using --format")
+
+    tables = read_pdf(
+        filepath,
+        pages=pages,
+        flavor="autotune",
+        suppress_stdout=quiet,
+        **kwargs,
     )
     click.echo(f"Found {tables.n} tables")
     if plot_type is not None:
@@ -286,6 +484,11 @@ def lattice(c, *args, **kwargs):
     " used to combine text horizontally, to generate columns.",
 )
 @click.option(
+    "--remove_background_artifacts/--no-remove_background_artifacts",
+    default=True,
+    help="Remove background images that overlap detected table areas (enabled by default).",
+)
+@click.option(
     "-plot",
     "--plot_type",
     type=click.Choice(["text", "grid", "contour", "textedge"]),
@@ -299,6 +502,7 @@ def stream(c, *args, **kwargs):
     pages = conf.pop("pages")
     output = conf.pop("output")
     f = conf.pop("format")
+    json_coords = conf.pop("json_coords", False)
     compress = conf.pop("zip")
     quiet = conf.pop("quiet")
     plot_type = kwargs.pop("plot_type")
@@ -313,6 +517,13 @@ def stream(c, *args, **kwargs):
     kwargs["columns"] = None if not columns else columns
 
     margins = conf.pop("margins")
+
+    if json_coords:
+        if f not in (None, "json-coords"):
+            raise click.UsageError(
+                "--json-coords cannot be combined with a different --format"
+            )
+        f = "json-coords"
 
     if margins is None:
         layout_kwargs = {}
@@ -374,6 +585,16 @@ def stream(c, *args, **kwargs):
     help="X coordinates of column separators.",
 )
 @click.option(
+    "--remove_background_artifacts/--no-remove_background_artifacts",
+    default=True,
+    help="Remove background images that overlap detected table areas (enabled by default).",
+)
+@click.option(
+    "--remove_text/--no-remove_text",
+    default=False,
+    help="Mask text glyphs inside candidate table areas before detecting grid lines.",
+)
+@click.option(
     "-e",
     "--edge_tol",
     default=50,
@@ -406,6 +627,7 @@ def hybrid(c, *args, **kwargs):
     pages = conf.pop("pages")
     output = conf.pop("output")
     f = conf.pop("format")
+    json_coords = conf.pop("json_coords", False)
     compress = conf.pop("zip")
     quiet = conf.pop("quiet")
     plot_type = kwargs.pop("plot_type")
@@ -418,6 +640,13 @@ def hybrid(c, *args, **kwargs):
     kwargs["table_areas"] = None if not table_areas else table_areas
     columns = list(kwargs["columns"])
     kwargs["columns"] = None if not columns else columns
+
+    if json_coords:
+        if f not in (None, "json-coords"):
+            raise click.UsageError(
+                "--json-coords cannot be combined with a different --format"
+            )
+        f = "json-coords"
 
     if plot_type is not None:
         if not _HAS_MPL:
@@ -497,6 +726,7 @@ def network(c, *args, **kwargs):
     pages = conf.pop("pages")
     output = conf.pop("output")
     f = conf.pop("format")
+    json_coords = conf.pop("json_coords", False)
     compress = conf.pop("zip")
     quiet = conf.pop("quiet")
     plot_type = kwargs.pop("plot_type")
@@ -509,6 +739,13 @@ def network(c, *args, **kwargs):
     kwargs["table_areas"] = None if not table_areas else table_areas
     columns = list(kwargs["columns"])
     kwargs["columns"] = None if not columns else columns
+
+    if json_coords:
+        if f not in (None, "json-coords"):
+            raise click.UsageError(
+                "--json-coords cannot be combined with a different --format"
+            )
+        f = "json-coords"
 
     if plot_type is not None:
         if not _HAS_MPL:

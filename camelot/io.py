@@ -38,7 +38,7 @@ def read_pdf(
     password : str, optional (default: None)
         Password for decryption.
     flavor : str (default: 'lattice')
-        The parsing method to use ('lattice', 'stream', 'network' or 'hybrid').
+        The parsing method to use ('lattice', 'stream', 'network', 'hybrid' or 'autotune').
         Lattice is used by default.
     suppress_stdout : bool, optional (default: False)
         Print all logs and warnings.
@@ -70,6 +70,14 @@ def read_pdf(
         to generate columns.
     process_background* : bool, optional (default: False)
         Process background lines.
+    remove_background_artifacts* : bool, optional (default: True)
+        Remove background images or watermarks that overlap detected
+        table areas before running line detection. Disable this if you
+        need to preserve background artwork during extraction.
+    remove_text* : bool, optional (default: False)
+        Temporarily blank text glyphs inside candidate table areas before
+        running the lattice line detector. This is useful when characters
+        fuse with the table borders and break the detected contours.
     line_scale* : int, optional (default: 40)
         Line size scaling factor. The larger the value the smaller
         the detected lines. Making it very large will lead to text
@@ -118,10 +126,10 @@ def read_pdf(
     """
     if layout_kwargs is None:
         layout_kwargs = {}
-    if flavor not in ["lattice", "stream", "network", "hybrid"]:
+    if flavor not in ["lattice", "stream", "network", "hybrid", "autotune"]:
         raise NotImplementedError(
             "Unknown flavor specified."
-            " Use either 'lattice', 'stream', 'network' or 'hybrid'"
+            " Use either 'lattice', 'stream', 'network', 'hybrid' or 'autotune'"
         )
 
     with warnings.catch_warnings():
@@ -131,11 +139,14 @@ def read_pdf(
         validate_input(kwargs, flavor=flavor)
         p = PDFHandler(filepath, pages=pages, password=password, debug=debug)
         kwargs = remove_extra(kwargs, flavor=flavor)
-        tables = p.parse(
-            flavor=flavor,
-            suppress_stdout=suppress_stdout,
-            parallel=parallel,
-            layout_kwargs=layout_kwargs,
-            **kwargs,
-        )
-        return tables
+        try:
+            tables = p.parse(
+                flavor=flavor,
+                suppress_stdout=suppress_stdout,
+                parallel=parallel,
+                layout_kwargs=layout_kwargs,
+                **kwargs,
+            )
+            return tables
+        finally:
+            p.close()

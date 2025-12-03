@@ -1,8 +1,10 @@
 import os
+import socket
 from pathlib import Path
 
 import pandas as pd
 from pandas.testing import assert_frame_equal
+import pytest
 
 import camelot
 from camelot.backends.ghostscript_backend import GhostscriptBackend
@@ -13,6 +15,19 @@ from camelot.io import PDFHandler
 from .conftest import skip_on_windows
 from .conftest import skip_pdftopng
 from .data import *
+
+
+def _network_available() -> bool:
+    try:
+        socket.getaddrinfo("camelot-py.readthedocs.io", 443)
+        return True
+    except OSError:
+        return False
+
+
+requires_network = pytest.mark.skipif(
+    not _network_available(), reason="network unavailable"
+)
 
 
 @skip_on_windows
@@ -72,6 +87,7 @@ def test_repr_ghostscript_custom_backend(testdir):
     assert repr(tables[0].cells[0][0]) == "<Cell x1=120 y1=218 x2=165 y2=234>"
 
 
+@requires_network
 def test_url_pdfium():
     url = "https://camelot-py.readthedocs.io/en/master/_static/pdf/foo.pdf"
     tables = camelot.read_pdf(
@@ -83,6 +99,7 @@ def test_url_pdfium():
 
 
 @skip_pdftopng
+@requires_network
 def test_url_poppler():
     url = "https://camelot-py.readthedocs.io/en/latest/_static/pdf/foo.pdf"
     tables = camelot.read_pdf(url, backend="poppler")
@@ -92,6 +109,7 @@ def test_url_poppler():
 
 
 @skip_on_windows
+@requires_network
 def test_url_ghostscript(testdir):
     url = "https://camelot-py.readthedocs.io/en/latest/_static/pdf/foo.pdf"
     tables = camelot.read_pdf(url, backend="ghostscript")
@@ -101,6 +119,7 @@ def test_url_ghostscript(testdir):
 
 
 @skip_on_windows
+@requires_network
 def test_url_ghostscript_custom_backend(testdir):
     url = "https://camelot-py.readthedocs.io/en/latest/_static/pdf/foo.pdf"
     tables = camelot.read_pdf(url, backend=GhostscriptBackend())
@@ -109,6 +128,7 @@ def test_url_ghostscript_custom_backend(testdir):
     assert repr(tables[0].cells[0][0]) == "<Cell x1=120 y1=218 x2=165 y2=234>"
 
 
+@requires_network
 def test_pages_pdfium():
     url = "https://camelot-py.readthedocs.io/en/master/_static/pdf/foo.pdf"
     tables = camelot.read_pdf(url, backend="pdfium", use_fallback=False)
@@ -128,6 +148,7 @@ def test_pages_pdfium():
 
 
 @skip_pdftopng
+@requires_network
 def test_pages_poppler():
     url = "https://camelot-py.readthedocs.io/en/latest/_static/pdf/foo.pdf"
     tables = camelot.read_pdf(url, backend="poppler", use_fallback=False)
@@ -147,6 +168,7 @@ def test_pages_poppler():
 
 
 @skip_on_windows
+@requires_network
 def test_pages_ghostscript():
     url = "https://camelot-py.readthedocs.io/en/latest/_static/pdf/foo.pdf"
     tables = camelot.read_pdf(url, backend="ghostscript", use_fallback=False)
@@ -170,6 +192,7 @@ def test_pages_ghostscript():
 
 
 @skip_on_windows
+@requires_network
 def test_pages_ghostscript_custom_backend():
     url = "https://camelot-py.readthedocs.io/en/latest/_static/pdf/foo.pdf"
     custom_backend = GhostscriptBackend()

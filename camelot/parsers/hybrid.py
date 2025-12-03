@@ -58,6 +58,10 @@ class Hybrid(BaseParser):
         debug=False,
         **kwargs,
     ):
+        remove_background_artifacts = kwargs.pop(
+            "remove_background_artifacts", True
+        )
+        remove_text = kwargs.pop("remove_text", False)
         super().__init__(
             "hybrid",
             table_regions=table_regions,
@@ -86,11 +90,15 @@ class Hybrid(BaseParser):
             flag_size=flag_size,
             split_text=split_text,
             strip_text=strip_text,
+            remove_background_artifacts=remove_background_artifacts,
+            remove_text=remove_text,
             edge_tol=edge_tol,
             row_tol=row_tol,
             column_tol=column_tol,
             debug=debug,
         )
+        self.remove_background_artifacts = remove_background_artifacts
+        self.remove_text = remove_text
 
     def prepare_page_parse(
         self,
@@ -101,7 +109,11 @@ class Hybrid(BaseParser):
         images,
         horizontal_text,
         vertical_text,
+        *,
+        rotation: int = 0,
         layout_kwargs,
+        source_filepath=None,
+        source_page_rotation=None,
     ):
         """Call this method to prepare the page parsing .
 
@@ -126,7 +138,10 @@ class Hybrid(BaseParser):
             images,
             horizontal_text,
             vertical_text,
-            layout_kwargs,
+            rotation=rotation,
+            layout_kwargs=layout_kwargs,
+            source_filepath=source_filepath,
+            source_page_rotation=source_page_rotation,
         )
         self.network_parser.prepare_page_parse(
             filename,
@@ -136,7 +151,10 @@ class Hybrid(BaseParser):
             images,
             horizontal_text,
             vertical_text,
-            layout_kwargs,
+            rotation=rotation,
+            layout_kwargs=layout_kwargs,
+            source_filepath=source_filepath,
+            source_page_rotation=source_page_rotation,
         )
         self.lattice_parser.prepare_page_parse(
             filename,
@@ -146,12 +164,15 @@ class Hybrid(BaseParser):
             images,
             horizontal_text,
             vertical_text,
-            layout_kwargs,
+            rotation=rotation,
+            layout_kwargs=layout_kwargs,
+            source_filepath=source_filepath,
+            source_page_rotation=source_page_rotation,
         )
 
-    def _generate_columns_and_rows(self, bbox, table_idx):
+    def _generate_columns_and_rows(self, bbox, user_cols):
         parser = self.table_bbox_parses[bbox]
-        return parser._generate_columns_and_rows(bbox, table_idx)
+        return parser._generate_columns_and_rows(bbox, user_cols)
 
     def _generate_table(self, table_idx, bbox, cols, rows, **kwargs):
         parser = self.table_bbox_parses[bbox]
@@ -247,11 +268,27 @@ class Hybrid(BaseParser):
             self.table_bbox_parses[augmented_bbox] = self.network_parser
 
     def _generate_table_bbox(self):
-        # Collect bboxes from both parsers
+        self.table_bbox_parses = {}
+        # Collect bboxes from both parsers. Reuse the lattice artifacts inside the
+        # network parser to avoid a second raster/threshold pass.
         self.lattice_parser._generate_table_bbox()
         _lattice_bboxes = sorted(
             self.lattice_parser.table_bbox_parses, key=lambda bbox: (bbox[0], -bbox[1])
         )
+        # Seed network parser with lattice preprocessing outputs when possible.
+        self.network_parser.table_bbox_parses = {}
+        self.network_parser.vertical_segments = getattr(
+            self.lattice_parser, "vertical_segments", None
+        )
+        self.network_parser.horizontal_segments = getattr(
+            self.lattice_parser, "horizontal_segments", None
+        )
+        self.network_parser.threshold = getattr(self.lattice_parser, "threshold", None)
+        self.network_parser.image_path = getattr(self.lattice_parser, "image_path", None)
+        self.network_parser.pdf_image = getattr(self.lattice_parser, "pdf_image", None)
+        self.network_parser.pdf_width = getattr(self.lattice_parser, "pdf_width", None)
+        self.network_parser.pdf_height = getattr(self.lattice_parser, "pdf_height", None)
+
         self.network_parser._generate_table_bbox()
         _network_bboxes = sorted(
             self.network_parser.table_bbox_parses, key=lambda bbox: (bbox[0], -bbox[1])

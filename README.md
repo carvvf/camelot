@@ -50,6 +50,12 @@ Camelot also comes packaged with a [command-line interface](https://camelot-py.r
 
 Refer to the [QuickStart Guide](https://github.com/camelot-dev/camelot/blob/master/docs/user/quickstart.rst#quickstart) to quickly get started with Camelot, extract tables from PDFs and explore some basic options.
 
+Custom builds that enable the ``json-coords`` export include additional helper tooling under ``tests/`` prefixed with ``jc-`` (for example ``jc-test_custom.sh`` or ``jc-test_params.py``) to streamline QA workflows against coordinate-aware outputs.
+Each exported table exposes ``layout.indicators.jc_accuracy`` which reports how many merged cells kept their text completely inside the detected borders (counted only when native textlines are present), making it easier to flag regression cases when reviewing the structured JSON.
+``layout.indicators.rectangularity`` complements that signal with paired metrics—``area_text_score`` / ``edge_text_score`` and ``area_full_score`` / ``edge_full_score`` (all reported as percentages from 0 to 100 and normalised over logical cells, so merged cells don’t dilute coverage)—so you can distinguish between gaps caused by missing text versus missing geometry when reviewing table exports, plus ``cells_score`` / ``fillers_score`` to highlight non-rectangular merged cells and how many base cells sit inside those irregular spans.
+ To disambiguate tables with merged cells (and collapse artefacts like double borders that create phantom rows/columns), ``grid.rows`` / ``grid.cols`` and ``layout.cell_count.grid`` both expose the effective (collapsed) grid size, while ``layout.cell_count.logical`` gives the merged cell count.
+The payload emitted by ``--format json-coords`` is versioned via the bundled schema descriptor ``camelot.json-coords`` (currently ``1.0.0``) and is documented in ``docs/schemas/json-coords/v1.json`` so downstream tooling can validate exports and detect breaking changes early.
+
 **Tip:** Visit the `parser-comparison-notebook` to get an overview of all the packed parsers and their features. [![image](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/camelot-dev/camelot/blob/master/examples/parser-comparison-notebook.ipynb)
 
 **Note:** Camelot only works with text-based PDFs and not scanned documents. (As Tabula [explains](https://github.com/tabulapdf/tabula#why-tabula), "If you can click and drag to select text in your table in a PDF viewer, then your PDF is text-based".)
@@ -83,6 +89,16 @@ pip install "camelot-py"
 ```
 
 Note that [additional dependencies](https://camelot-py.readthedocs.io/en/latest/user/install-deps.html) may be required if you want to use the non-default backend [ghostscript](https://www.ghostscript.com/).
+
+## Development environment
+
+For local QA and the `jc-*` helper scripts we recommend creating the bundled virtual environment:
+
+```bash
+tests/jc-initvenv.sh
+```
+
+The bootstrapper provisions `.venv`, installs Camelot in editable mode with the `dev` extras, and ensures that the supporting tools we rely on during development—`ghostscript`, `pytest`, `jsonschema`, and their related Python packages—are available. The script also warns if the `gs` executable itself is missing from `PATH`, so you can install it via your OS package manager before running the Ghostscript-specific tests.
 
 ### From the source code
 

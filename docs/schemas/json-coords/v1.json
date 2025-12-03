@@ -1,0 +1,755 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/carvvf/camelot/custom/docs/schemas/json-coords/v1.json",
+  "title": "Camelot json-coords export schema (v1)",
+  "type": "object",
+  "required": [
+    "schema",
+    "tables"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "$ref": "#/$defs/SchemaDescriptor"
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Table"
+      }
+    }
+  },
+  "$defs": {
+    "SchemaDescriptor": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "const": "camelot.json-coords"
+        },
+        "version": {
+          "const": "1.0.0"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "Table": {
+      "type": "object",
+      "required": [
+        "page",
+        "order"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "parsing_report": {
+          "$ref": "#/$defs/ParsingReport"
+        },
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DataRow"
+          }
+        },
+        "flavor": {
+          "type": "string",
+          "enum": [
+            "lattice",
+            "stream"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "page_rotation_pdfinfo": {
+          "type": "integer"
+        },
+        "grid": {
+          "$ref": "#/$defs/Grid"
+        },
+        "layout": {
+          "$ref": "#/$defs/Layout"
+        },
+        "isolated_cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/IsolatedCell"
+          }
+        },
+        "rotation": {
+          "type": "number"
+        },
+        "pdf_size": {
+          "$ref": "#/$defs/PageSize"
+        },
+        "bbox": {
+          "$ref": "#/$defs/BoundingBox"
+        },
+        "spanning_cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LogicalCell"
+          }
+        }
+      }
+    },
+    "ParsingReport": {
+      "type": "object",
+      "additionalProperties": {
+        "type": [
+          "number",
+          "integer"
+        ]
+      }
+    },
+    "DataRow": {
+      "type": "object",
+      "additionalProperties": {
+        "type": [
+          "string",
+          "number",
+          "integer",
+          "boolean",
+          "null"
+        ]
+      }
+    },
+    "SourceRef": {
+      "type": "object",
+      "required": [
+        "file"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string"
+        }
+      }
+    },
+    "Grid": {
+      "type": "object",
+      "required": [
+        "rows",
+        "cols"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cols": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "PageSize": {
+      "type": "object",
+      "required": [
+        "width",
+        "height"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        }
+      }
+    },
+    "BoundingBox": {
+      "type": "object",
+      "required": [
+        "abs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "abs": {
+          "$ref": "#/$defs/Quadruple"
+        },
+        "norm": {
+          "$ref": "#/$defs/Quadruple"
+        }
+      }
+    },
+    "Quadruple": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "SimpleBoundingBox": {
+      "type": "object",
+      "required": [
+        "x1",
+        "y1",
+        "x2",
+        "y2"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "x1": {
+          "type": "number"
+        },
+        "y1": {
+          "type": "number"
+        },
+        "x2": {
+          "type": "number"
+        },
+        "y2": {
+          "type": "number"
+        }
+      }
+    },
+    "IsolatedCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "$ref": "#/$defs/SimpleBoundingBox"
+        },
+        "texts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "bbox"
+          ]
+        },
+        {
+          "required": [
+            "texts"
+          ]
+        }
+      ]
+    },
+    "LayoutIsolatedCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "$ref": "#/$defs/BoundingBox"
+        },
+        "texts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "bbox"
+          ]
+        },
+        {
+          "required": [
+            "texts"
+          ]
+        }
+      ]
+    },
+    "Layout": {
+      "type": "object",
+      "required": [
+        "rotation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "page_size": {
+          "$ref": "#/$defs/PageSize"
+        },
+        "rotation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 359
+        },
+        "bbox": {
+          "$ref": "#/$defs/BoundingBox"
+        },
+        "cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Cell"
+          }
+        },
+        "logical_cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LogicalCell"
+          }
+        },
+        "isolated_cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LayoutIsolatedCell"
+          }
+        },
+        "column_positions": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "row_positions": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "grid_lines": {
+          "$ref": "#/$defs/GridLines"
+        },
+        "text_line_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cell_count": {
+          "$ref": "#/$defs/CellCount"
+        },
+        "indicators": {
+          "$ref": "#/$defs/Indicators"
+        }
+      }
+    },
+    "Cell": {
+      "type": "object",
+      "required": [
+        "row",
+        "column",
+        "edges",
+        "spanning"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "row": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "edges": {
+          "$ref": "#/$defs/CellEdges"
+        },
+        "spanning": {
+          "$ref": "#/$defs/CellSpanning"
+        },
+        "text": {
+          "type": "string"
+        },
+        "raw_text": {
+          "type": "string"
+        },
+        "bbox": {
+          "$ref": "#/$defs/BoundingBox"
+        }
+      }
+    },
+    "CellEdges": {
+      "type": "object",
+      "required": [
+        "top",
+        "bottom",
+        "left",
+        "right"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "top": {
+          "type": "boolean"
+        },
+        "bottom": {
+          "type": "boolean"
+        },
+        "left": {
+          "type": "boolean"
+        },
+        "right": {
+          "type": "boolean"
+        }
+      }
+    },
+    "CellSpanning": {
+      "type": "object",
+      "required": [
+        "horizontal",
+        "vertical"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "horizontal": {
+          "type": "boolean"
+        },
+        "vertical": {
+          "type": "boolean"
+        }
+      }
+    },
+    "CellCount": {
+      "type": "object",
+      "required": [
+        "grid"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "grid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "logical": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "LogicalCell": {
+      "type": "object",
+      "required": [
+        "row_start",
+        "row_end",
+        "col_start",
+        "col_end",
+        "row_span",
+        "col_span",
+        "source_cells"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "row_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "row_end": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "col_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "col_end": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "row_span": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "col_span": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "text": {
+          "type": "string"
+        },
+        "raw_text": {
+          "type": "string"
+        },
+        "bbox": {
+          "$ref": "#/$defs/BoundingBox"
+        },
+        "source_cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CellCoordinate"
+          }
+        }
+      }
+    },
+    "CellCoordinate": {
+      "type": "object",
+      "required": [
+        "row",
+        "column"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "row": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "GridLines": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vertical": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GridLine"
+          }
+        },
+        "horizontal": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GridLine"
+          }
+        }
+      }
+    },
+    "GridLine": {
+      "type": "object",
+      "required": [
+        "orientation",
+        "source",
+        "points"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "orientation": {
+          "type": "string",
+          "enum": [
+            "horizontal",
+            "vertical"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Point"
+          },
+          "minItems": 2
+        },
+        "norm_points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Point"
+          }
+        }
+      }
+    },
+    "Point": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "Indicators": {
+      "type": "object",
+      "properties": {
+        "jc_accuracy": {
+          "$ref": "#/$defs/JcAccuracyIndicator"
+        },
+        "rectangularity": {
+          "$ref": "#/$defs/RectangularityIndicator"
+        }
+      },
+      "additionalProperties": true
+    },
+    "JcAccuracyIndicator": {
+      "type": "object",
+      "required": [
+        "score",
+        "inspected"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "inspected": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "violations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JcViolation"
+          }
+        }
+      }
+    },
+    "RectangularityIndicator": {
+      "type": "object",
+      "required": [
+        "area_text_score",
+        "edge_text_score"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "area_text_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "edge_text_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "cells_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "fillers_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "area_full_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "edge_full_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "edge_text_gaps": {
+          "type": "object",
+          "properties": {
+            "top": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bottom": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "left": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "right": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "edge_full_gaps": {
+          "type": "object",
+          "properties": {
+            "top": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bottom": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "left": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "right": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "JcViolation": {
+      "type": "object",
+      "required": [
+        "cell",
+        "text_lines"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "cell": {
+          "$ref": "#/$defs/JcViolationCell"
+        },
+        "text_lines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JcViolationTextLine"
+          }
+        }
+      }
+    },
+    "JcViolationCell": {
+      "type": "object",
+      "required": [
+        "row_start",
+        "row_end",
+        "col_start",
+        "col_end"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "row_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "row_end": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "col_start": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "col_end": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bbox": {
+          "$ref": "#/$defs/BoundingBox"
+        }
+      }
+    },
+    "JcViolationTextLine": {
+      "type": "object",
+      "required": [
+        "text",
+        "bbox"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "bbox": {
+          "$ref": "#/$defs/BoundingBox"
+        }
+      }
+    }
+  }
+}

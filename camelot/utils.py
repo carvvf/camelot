@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import functools
 import math
 import os
 import random
@@ -45,6 +46,70 @@ from pypdf._utils import StrByteType
 
 _VALID_URLS = set(uses_relative + uses_netloc + uses_params)
 _VALID_URLS.discard("")
+
+_PDF_CHAR_REPLACEMENTS: dict[int, str] = {
+    ord("\uf020"): " ",  # non-breaking space surrogate
+    ord("\uf028"): "\u260e",  # telephone symbol
+    ord("\uf02b"): "+",  # plus sign
+    ord("\uf02d"): "\u2212",  # minus sign
+    ord("\uf071"): "\u2610",  # ballot box
+    ord("\uf0a3"): "\u25a1",  # square outline
+    ord("\uf0a7"): "\u25aa",  # small black square
+    ord("\uf0a8"): "\u25c7",  # white diamond
+    ord("\uf0b7"): "\u2022",  # bullet
+    ord("\uf0b8"): "\u00f7",  # division sign used as time separator
+    ord("\uf0d8"): "\u25ba",  # black right-pointing pointer
+    ord("\uf0fc"): "\u2714",  # check mark
+}
+
+_CID_PLACEHOLDER_PATTERN = re.compile(r"\(cid:(\d+)\)")
+
+
+def _cid_code_to_char(code: int) -> str | None:
+    """Best-effort conversion from a CID placeholder code to a Unicode character."""
+    if code in (0, 65535):
+        return ""
+    if code in (9, 10, 13):  # tab/newline/carriage return
+        return " "
+
+    replacement = _PDF_CHAR_REPLACEMENTS.get(code)
+    if replacement is not None:
+        return replacement
+
+    try:
+        char = chr(code)
+    except ValueError:
+        return None
+
+    # Filter out non-printable control characters (except whitespace)
+    if char < " " and char not in {"\t", "\n", "\r"}:
+        return None
+
+    return char
+
+
+def _replace_cid_placeholders(textline: LTTextLine) -> bool:
+    """Replace CID placeholders embedded in an LTTextLine with best-effort Unicode.
+
+    Returns True when at least one placeholder was replaced, False otherwise.
+    """
+    replaced = False
+    for obj in getattr(textline, "_objs", []):
+        if not isinstance(obj, LTChar):
+            continue
+
+        match = _CID_PLACEHOLDER_PATTERN.fullmatch(obj.get_text())
+        if not match:
+            continue
+
+        replacement = _cid_code_to_char(int(match.group(1)))
+        if replacement is None:
+            continue
+
+        obj._text = replacement
+        replaced = True
+
+    return replaced
 
 
 # https://github.com/pandas-dev/pandas/blob/master/pandas/io/common.py
@@ -103,20 +168,26 @@ def download_url(url: str) -> StrByteType | Path:
 
     """
     filename = f"{random_string(6)}.pdf"
+    temp_name = None
     with tempfile.NamedTemporaryFile("wb", delete=False) as f:  # noqa S310
-        # Valid url checking has been done in function is_url
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept-Encoding": "gzip;q=1.0, deflate;q=0.9, br;q=0.8, compress;q=0.7, *;q=0.1",
-        }
-        request = Request(url, None, headers)
-        obj = urlopen(request)  # noqa S310
-        content_type = obj.info().get_content_type()
-        if content_type != "application/pdf":
-            raise NotImplementedError("File format not supported")
-        f.write(obj.read())
+        temp_name = f.name
+        try:
+            # Valid url checking has been done in function is_url
+            headers = {
+                "User-Agent": "Mozilla/5.0",
+                "Accept-Encoding": "gzip;q=1.0, deflate;q=0.9, br;q=0.8, compress;q=0.7, *;q=0.1",
+            }
+            request = Request(url, None, headers)
+            obj = urlopen(request)  # noqa S310
+            content_type = obj.info().get_content_type()
+            if content_type != "application/pdf":
+                raise NotImplementedError("File format not supported")
+            f.write(obj.read())
+        except Exception:
+            Path(temp_name).unlink(missing_ok=True)
+            raise
     filepath = os.path.join(os.path.dirname(f.name), filename)
-    shutil.move(f.name, filepath)
+    shutil.move(temp_name or f.name, filepath)
     return filepath
 
 
@@ -128,10 +199,13 @@ common_kwargs = [
     "table_areas",
     "table_regions",
     "backend",
+    "remove_background_artifacts",
 ]
 text_kwargs = common_kwargs + ["columns", "edge_tol", "row_tol", "column_tol"]
 lattice_kwargs = common_kwargs + [
     "process_background",
+    "remove_background_artifacts",
+    "remove_text",
     "line_scale",
     "copy_text",
     "shift_text",
@@ -143,11 +217,15 @@ lattice_kwargs = common_kwargs + [
     "resolution",
     "use_fallback",
 ]
+autotune_kwargs = [
+    kw for kw in lattice_kwargs if kw != "process_background"
+]
 flavor_to_kwargs = {
     "stream": text_kwargs,
     "network": text_kwargs,
     "lattice": lattice_kwargs,
     "hybrid": text_kwargs + lattice_kwargs,
+    "autotune": autotune_kwargs,
 }
 
 
@@ -205,6 +283,10 @@ def remove_extra(kwargs, flavor="lattice"):
 class TemporaryDirectory:
     """A class method that will be used to create temporary directories."""
 
+    def __init__(self):
+        self.name: str | None = None
+        self._finalizer: Callable[[], None] | None = None
+
     def __enter__(self):
         """Enter the temporary directory .
 
@@ -214,10 +296,27 @@ class TemporaryDirectory:
             [description]
         """
         self.name = tempfile.mkdtemp()
-        # Only delete the temporary directory upon
-        # program exit.
-        atexit.register(shutil.rmtree, self.name)
+        # Best effort cleanup even if __exit__ is not reached.
+        self._finalizer = functools.partial(
+            shutil.rmtree, self.name, ignore_errors=True
+        )
+        atexit.register(self._finalizer)
         return self.name
+
+    def cleanup(self) -> None:
+        """Remove the temporary directory immediately."""
+        if self._finalizer is None:
+            return
+        try:
+            self._finalizer()
+        finally:
+            try:
+                atexit.unregister(self._finalizer)
+            except Exception:
+                # Unregister may fail if the finalizer was already run.
+                pass
+            self._finalizer = None
+            self.name = None
 
     def __exit__(self, exc_type, exc_value, traceback):
         """Called when the client exits.
@@ -231,7 +330,14 @@ class TemporaryDirectory:
         traceback : [type]
             [description]
         """
-        pass
+        self.cleanup()
+
+    def __del__(self):
+        try:
+            self.cleanup()
+        except Exception:
+            # Avoid raising during interpreter shutdown.
+            pass
 
 
 def build_file_path_in_temp_dir(filename, extension=None):
@@ -247,10 +353,12 @@ def build_file_path_in_temp_dir(filename, extension=None):
     file_path_in_temporary_dir : str
 
     """
-    with TemporaryDirectory() as temp_dir:
-        if extension:
-            filename = filename + extension
-        path = os.path.join(temp_dir, filename)
+    if extension:
+        filename = filename + extension
+    suffix = Path(filename).suffix
+    prefix = f"camelot-{Path(filename).stem}-"
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
+    os.close(fd)
     return path
 
 
@@ -910,6 +1018,12 @@ def text_strip(text, strip=""):
     -------
     stripped : str
     """
+    if not text:
+        return text
+
+    if _PDF_CHAR_REPLACEMENTS:
+        text = text.translate(_PDF_CHAR_REPLACEMENTS)
+
     if not strip:
         return text
 
@@ -1197,11 +1311,16 @@ def get_table_index(
         |       |
         +-------+
     """
+    raw_text = t.get_text()
+    if "(cid:" in raw_text:
+        if _replace_cid_placeholders(t):
+            raw_text = t.get_text()
+        if "(cid:" in raw_text:
+            table._has_cid_placeholders = True
+
     r_idx, c_idx = [-1] * 2
     for r in range(len(table.rows)):  # noqa
-        if (t.y0 + t.y1) / 2.0 < table.rows[r][0] and (t.y0 + t.y1) / 2.0 > table.rows[
-            r
-        ][1]:
+        if (t.y0 + t.y1) / 2.0 < table.rows[r][0] and (t.y0 + t.y1) / 2.0 > table.rows[r][1]:
             lt_col_overlap = []
             for c in table.cols:
                 if c[0] <= t.x1 and c[1] >= t.x0:
@@ -1211,7 +1330,7 @@ def get_table_index(
                 else:
                     lt_col_overlap.append(-1)
             if len(list(filter(lambda x: x != -1, lt_col_overlap))) == 0:
-                text = t.get_text().strip("\n")
+                text = raw_text.strip("\n")
                 text_range = (t.x0, t.x1)
                 col_range = (table.cols[0][0], table.cols[-1][1])
                 warnings.warn(
@@ -1477,8 +1596,10 @@ def get_image_char_and_text_objects(
             if isinstance(_object, LTImage):
                 image.append(_object)
             elif isinstance(_object, LTTextLineHorizontal):
+                _replace_cid_placeholders(_object)
                 horizontal_text.append(_object)
             elif isinstance(_object, LTTextLineVertical):
+                _replace_cid_placeholders(_object)
                 vertical_text.append(_object)
             if isinstance(_object, LTChar):
                 char.append(_object)

@@ -31,6 +31,29 @@ To process background lines, you can pass ``process_background=True``.
 
         $ camelot lattice -back background_lines.pdf
 
+If the table region also contains a watermark or another image that adds noise,
+Camelot now removes that artwork by default. Pass
+``remove_background_artifacts=False`` (or ``--no-remove_background_artifacts`` on
+the CLI) if you need to keep the background imagery intact before detecting the
+table structure.
+
+Mask interfering text
+---------------------
+
+Scans where characters touch the table borders can confuse the line detector.
+Set ``remove_text=True`` (or ``--remove_text`` on the CLI) to blank the text
+pixels inside the candidate table areas before Camelot searches for grid lines.
+The textual content still comes from the original PDF objects, so only the
+intermediate raster image is affected.
+
+.. code-block:: pycon
+
+    >>> tables = camelot.read_pdf("noisy.pdf", remove_text=True, table_areas=["72,510,540,320"])
+
+If you already know where the tables are, prefer passing ``table_areas`` or
+``table_regions`` so the masking stays confined to those coordinates. Without
+them Camelot masks the full page, which is still safe but slightly slower.
+
 .. csv-table::
   :file: ../_static/csv/background_lines.csv
   :class: full-width

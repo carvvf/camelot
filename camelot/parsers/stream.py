@@ -61,6 +61,9 @@ class Stream(TextBaseParser):
         column_tol=0,
         **kwargs,
     ):
+        self.remove_background_artifacts = bool(
+            kwargs.pop("remove_background_artifacts", True)
+        )
         super().__init__(
             "stream",
             table_regions=table_regions,
@@ -73,8 +76,50 @@ class Stream(TextBaseParser):
             edge_tol=edge_tol,
             row_tol=row_tol,
             column_tol=column_tol,
+            **kwargs,
         )
         self.textedges = []
+        self._background_regions = None
+
+    def prepare_page_parse(
+        self,
+        filename,
+        layout,
+        dimensions,
+        page_idx,
+        images,
+        horizontal_text,
+        vertical_text,
+        *,
+        rotation: int = 0,
+        layout_kwargs,
+        source_filepath=None,
+        source_page_rotation=None,
+    ):
+        super().prepare_page_parse(
+            filename,
+            layout,
+            dimensions,
+            page_idx,
+            images,
+            horizontal_text,
+            vertical_text,
+            rotation=rotation,
+            layout_kwargs=layout_kwargs,
+            source_filepath=source_filepath,
+            source_page_rotation=source_page_rotation,
+        )
+        if self.remove_background_artifacts:
+            self._background_regions = [
+                image.bbox
+                for image in images or []
+                if getattr(image, "bbox", None) is not None
+            ]
+            if self._background_regions:
+                self.horizontal_text = self._filter_background_text(self.horizontal_text)
+                self.vertical_text = self._filter_background_text(self.vertical_text)
+            else:
+                self._background_regions = None
 
     def _nurminen_table_detection(self, textlines):
         """Anssi Nurminen's Table detection algorithm.
@@ -107,6 +152,74 @@ class Stream(TextBaseParser):
         super().record_parse_metadata(table)
         table._textedges = self.textedges
 
+    def _filter_background_text(self, textlines):
+        if not textlines or not self._background_regions:
+            return textlines
+
+        filtered = []
+        for textline in textlines:
+            bbox = (textline.x0, textline.y0, textline.x1, textline.y1)
+            if not self._bbox_within_background(bbox):
+                filtered.append(textline)
+        return filtered
+
+    def _bbox_within_background(self, bbox):
+        if not self._background_regions:
+            return False
+        x0, y0, x1, y1 = bbox
+        for bx0, by0, bx1, by1 in self._background_regions:
+            if (
+                x0 >= bx0
+                and x1 <= bx1
+                and y0 >= by0
+                and y1 <= by1
+            ):
+                return True
+        return False
+
+    def _bbox_overlaps_background(self, bbox):
+        if not self._background_regions:
+            return False
+        x0, y0, x1, y1 = bbox
+        for bx0, by0, bx1, by1 in self._background_regions:
+            if not (x1 <= bx0 or x0 >= bx1 or y1 <= by0 or y0 >= by1):
+                return True
+        return False
+
+    def extract_tables(self):
+        tables = super().extract_tables()
+        if not tables or not self.remove_background_artifacts:
+            return tables
+
+        filtered_tables = []
+        for table in tables:
+            if self._should_drop_background_table(table):
+                continue
+            filtered_tables.append(table)
+        return filtered_tables
+
+    def _should_drop_background_table(self, table):
+        if not self._background_regions or not getattr(table, "cells", None):
+            return False
+        if not self._bbox_overlaps_background(table._bbox):
+            return False
+
+        rows_with_text = 0
+        multi_column_rows = 0
+        for row in table.cells:
+            nonempty = sum(1 for cell in row if cell.text.strip())
+            if nonempty == 0:
+                continue
+            rows_with_text += 1
+            if nonempty >= 2:
+                multi_column_rows += 1
+
+        if rows_with_text == 0:
+            return True
+
+        ratio = multi_column_rows / rows_with_text
+        return ratio < 0.4
+
     def _generate_table_bbox(self):
         if self.table_areas is None:
             hor_text = self.horizontal_text
@@ -132,9 +245,20 @@ class Stream(TextBaseParser):
             bbox, self.horizontal_text, self.vertical_text
         )
 
-        text_x_min, text_y_min, text_x_max, text_y_max = bbox_from_textlines(
-            self.t_bbox["horizontal"] + self.t_bbox["vertical"]
-        )
+        textlines = self.t_bbox["horizontal"] + self.t_bbox["vertical"]
+        if not textlines:
+            warnings.warn(f"No tables found in table area {bbox}", stacklevel=2)
+            return [], [], None, None
+
+        text_bbox = bbox_from_textlines(textlines)
+        if text_bbox is None:
+            warnings.warn(
+                f"Unable to determine text bounding box in table area {bbox}",
+                stacklevel=2,
+            )
+            return [], [], None, None
+
+        text_x_min, text_y_min, text_x_max, text_y_max = text_bbox
 
         rows_grouped = self._group_rows(self.t_bbox["horizontal"], row_tol=self.row_tol)
         rows = self._join_rows(rows_grouped, text_y_max, text_y_min)

@@ -14,7 +14,7 @@ from tests.conftest import skip_on_windows
 def test_unknown_flavor(foo_pdf):
     message = (
         "Unknown flavor specified."
-        " Use either 'lattice', 'stream', 'network' or 'hybrid'"
+        " Use either 'lattice', 'stream', 'network', 'hybrid' or 'autotune'"
     )
     with pytest.raises(NotImplementedError, match=message):
         camelot.read_pdf(foo_pdf, flavor="chocolate")

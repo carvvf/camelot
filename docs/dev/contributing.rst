@@ -41,6 +41,8 @@ Alternatively, you can clone the project repository, and install using pip::
 
     $ pip install ".[dev]"
 
+When working with the JSON coords QA helpers (`tests/jc-test_params.py`, `tests/jc-draw-boxes.sh`, etc.) you can also run ``tests/jc-initvenv.sh``. The script provisions ``.venv`` in place, installs Camelot in editable mode with the ``dev`` extras, and explicitly pulls in the supplemental tooling we depend on (``ghostscript``, ``pytest`` and ``jsonschema``) so that CLI and Ghostscript-oriented tests run without additional manual steps. It will warn you if the ``gs`` executable itself is missing from ``PATH`` so you can install the system package before continuing.
+
 Pull Requests
 -------------
 

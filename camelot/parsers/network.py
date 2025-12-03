@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any
 
@@ -21,6 +22,8 @@ from ..utils import text_in_bbox
 from ..utils import text_in_bbox_per_axis
 from ..utils import textlines_overlapping_bbox
 from .base import TextBaseParser
+
+logger = logging.getLogger("camelot")
 
 
 # maximum number of columns over which a header can spread
@@ -955,7 +958,18 @@ class Network(TextBaseParser):
                 key=lambda textline: (-textline.y0, textline.x0),
             )
         )
-        text_x_min, text_y_min, text_x_max, text_y_max = bbox_from_textlines(all_tls)
+        if not all_tls:
+            logger.warning("No textlines found in bbox %s; skipping.", bbox)
+            return [], [], [], []
+
+        bbox_from_tls = bbox_from_textlines(all_tls)
+        if bbox_from_tls is None:
+            logger.warning(
+                "Unable to determine text bounding box for %s; skipping.", bbox
+            )
+            return [], [], [], []
+
+        text_x_min, text_y_min, text_x_max, text_y_max = bbox_from_tls
         # FRHTODO:
         # This algorithm takes the horizontal textlines in the bbox, and groups
         # them into rows based on their bottom y0.
@@ -982,7 +996,7 @@ class Network(TextBaseParser):
                 # Handle the KeyError gracefully by returning empty lists
                 # or by performing alternative logic, such as using a default
                 # bounding box or skipping the table.
-                print(f"Warning: Bounding box {bbox} not found in table_bbox_parses.")
+                logger.warning("Bounding box %s not found in table_bbox_parses.", bbox)
                 return [], [], [], []  # Return empty lists for cols, rows, v_s, h_s
 
         return cols, rows, None, None

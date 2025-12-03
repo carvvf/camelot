@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import warnings
@@ -7,6 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from camelot.cli import cli
+from camelot.core import JSON_COORDS_SCHEMA_DESCRIPTOR
 from camelot.utils import TemporaryDirectory
 from tests.conftest import skip_on_windows
 
@@ -211,6 +213,8 @@ def test_cli_password(testdir):
 def test_cli_output_format(testdir):
     with TemporaryDirectory() as tempdir:
         infile = os.path.join(testdir, "health.pdf")
+        infile_abs = os.path.abspath(infile)
+        infile_arg = os.path.relpath(infile_abs)
 
         runner = CliRunner()
 
@@ -218,15 +222,48 @@ def test_cli_output_format(testdir):
         outfile = os.path.join(tempdir, "health.json")
         result = runner.invoke(
             cli,
-            ["--format", "json", "--output", outfile, "stream", infile],
+            ["--format", "json", "--output", outfile, "stream", infile_arg],
         )
         assert result.exit_code == 0, f"Output: {result.output}"
+
+        # json with coordinates
+        outfile = os.path.join(tempdir, "health-coords.json")
+        result = runner.invoke(
+            cli,
+            ["--format", "json-coords", "--output", outfile, "stream", infile_arg],
+        )
+        assert result.exit_code == 0, f"Output: {result.output}"
+
+        with open(outfile, encoding="utf-8") as fp:
+            payload = json.load(fp)
+
+        assert isinstance(payload, dict)
+        assert "tables" in payload
+        schema_entry = payload.get("schema")
+        assert schema_entry, "missing schema descriptor in json-coords payload"
+        assert schema_entry["name"] == "camelot.json-coords"
+        assert schema_entry["version"] == "1.0.0"
+        assert schema_entry["url"] == JSON_COORDS_SCHEMA_DESCRIPTOR["url"]
+        assert len(payload["tables"]) == 1
+        first_table = payload["tables"][0]
+
+        assert "rotation" not in first_table
+        assert "bbox" not in first_table
+        layout_info = first_table.get("layout")
+        assert layout_info, "layout metadata missing"
+        assert layout_info.get("rotation") in {0, 90, 180, 270}
+        bbox_info = layout_info.get("bbox", {}).get("abs")
+        assert bbox_info is not None
+        assert bbox_info[0] < bbox_info[2]
+        assert first_table["page_rotation_pdfinfo"] in {0, 90, 180, 270}
+        assert "rotation_direction" not in first_table
+        assert first_table["source"]["file"] == infile_abs
 
         # excel
         outfile = os.path.join(tempdir, "health.xlsx")
         result = runner.invoke(
             cli,
-            ["--format", "excel", "--output", outfile, "stream", infile],
+            ["--format", "excel", "--output", outfile, "stream", infile_arg],
         )
         assert result.exit_code == 0, f"Output: {result.output}"
 
@@ -234,7 +271,7 @@ def test_cli_output_format(testdir):
         outfile = os.path.join(tempdir, "health.html")
         result = runner.invoke(
             cli,
-            ["--format", "html", "--output", outfile, "stream", infile],
+            ["--format", "html", "--output", outfile, "stream", infile_arg],
         )
         assert result.exit_code == 0, f"Output: {result.output}"
 
@@ -242,7 +279,7 @@ def test_cli_output_format(testdir):
         outfile = os.path.join(tempdir, "health.md")
         result = runner.invoke(
             cli,
-            ["--format", "markdown", "--output", outfile, "stream", infile],
+            ["--format", "markdown", "--output", outfile, "stream", infile_arg],
         )
         assert result.exit_code == 0, f"Output: {result.output}"
 
@@ -257,7 +294,7 @@ def test_cli_output_format(testdir):
                 "--output",
                 outfile,
                 "stream",
-                infile,
+                infile_arg,
             ],
         )
         assert result.exit_code == 0, f"Output: {result.output}"

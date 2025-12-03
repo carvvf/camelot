@@ -1,5 +1,6 @@
 """Classes and functions for the ImageConversionBackend backends."""
 
+import threading
 from typing import Any
 from typing import Dict
 from typing import List
@@ -20,6 +21,9 @@ BACKENDS: Dict[str, Type[ConversionBackend]] = {
 
 class ImageConversionError(ValueError):  # noqa D101
     pass
+
+
+_CONVERT_LOCK = threading.Lock()
 
 
 class ImageConversionBackend:
@@ -121,19 +125,40 @@ class ImageConversionBackend:
         type
             [description]
         """
-        try:
-            self.backend.convert(pdf_path, png_path)
-        except Exception as f:
-            if self.use_fallback:
+        last_exc: Exception | None = None
+        with _CONVERT_LOCK:
+            try:
+                self.backend.convert(pdf_path, png_path)
+                return
+            except Exception as exc:  # pragma: no cover - backend specific
+                last_exc = exc
+                if not self.use_fallback or not self.fallbacks:
+                    msg = (
+                        "Image conversion failed with image conversion backend "
+                        f"{self.backend!r}\n error: {exc}"
+                    )
+                    raise ImageConversionError(msg) from exc
+
+                fallback_errors: list[tuple[str, Exception]] = []
                 for fallback in self.fallbacks:
                     try:
                         converter = BACKENDS[fallback]()
                         converter.convert(pdf_path, png_path)
-                    except Exception as e:
-                        msg = f"Image conversion failed with image conversion backend {fallback!r}\n error: {e}"
-                        raise ImageConversionError(msg) from e
-                    else:
-                        break
-            else:
-                msg = f"Image conversion failed with image conversion backend {self.backend!r}\n error: {f}"
-                raise ImageConversionError(msg) from f
+                        return
+                    except Exception as exc_fallback:  # pragma: no cover
+                        last_exc = exc_fallback
+                        fallback_errors.append((fallback, exc_fallback))
+
+                if fallback_errors:
+                    fallback_name, fallback_exc = fallback_errors[0]
+                    msg = (
+                        "Image conversion failed with image conversion backend "
+                        f"'{fallback_name}'\n error: {fallback_exc}"
+                    )
+                    raise ImageConversionError(msg) from fallback_exc
+
+        msg = (
+            "Image conversion failed with available backends; "
+            f"last error: {last_exc}"
+        )
+        raise ImageConversionError(msg) from last_exc

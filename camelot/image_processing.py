@@ -44,7 +44,13 @@ def adaptive_threshold(imagename, process_background=False, blocksize=15, c=-2):
 
 
 def find_lines(
-    threshold, regions=None, direction="horizontal", line_scale=40, iterations=0
+    threshold,
+    regions=None,
+    direction="horizontal",
+    line_scale=40,
+    iterations=0,
+    *,
+    precomputed_mask=None,
 ):
     """
     Finds horizontal and vertical lines by applying morphological transformations on an image.
@@ -79,7 +85,10 @@ def find_lines(
         raise ValueError("Specify direction as either 'vertical' or 'horizontal'")
 
     el, size = create_structuring_element(threshold, direction, line_scale)
-    threshold = apply_region_mask(threshold, regions)
+    if precomputed_mask is None:
+        threshold = apply_region_mask(threshold, regions)
+    else:
+        threshold = np.multiply(threshold, precomputed_mask)
 
     processed_threshold = process_image(threshold, el, iterations)
     contours, _ = cv2.findContours(
@@ -222,8 +231,8 @@ def find_contours(vertical, horizontal):
     contours, __ = cv2.findContours(
         mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
-    # sort in reverse based on contour area and use first 10 contours
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
+    # sort in reverse based on contour area and use first 100 contours
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:100]
 
     cont = []
     for c in contours:

@@ -8,6 +8,17 @@ import camelot
 from .data import *
 
 
+def _assert_contains_table(tables, expected_df):
+    """Ensure the expected dataframe is present regardless of table order."""
+    for table in tables:
+        try:
+            assert_frame_equal(expected_df, table.df)
+            return table
+        except AssertionError:
+            continue
+    raise AssertionError("Expected table not found in extracted results.")
+
+
 def test_hybrid(testdir):
     df = pd.DataFrame(data_hybrid)
 
@@ -57,7 +68,8 @@ def test_hybrid_process_background(testdir):
 
     filename = os.path.join(testdir, "background_lines_1.pdf")
     tables = camelot.read_pdf(filename, flavor="hybrid", process_background=True)
-    assert_frame_equal(df, tables[1].df)
+    assert len(tables) >= 1
+    _assert_contains_table(tables, df)
 
 
 def test_hybrid_table_regions(testdir):

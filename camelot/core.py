@@ -586,6 +586,8 @@ class Table:
         self._image_path = None  # Temporary file to hold an image of the pdf
         self._spanning_cells = None  # Cached logical cells rebuilt from edges
         self._has_cid_placeholders = False
+        self._cid_total_count = 0
+        self._cid_unresolved_count = 0
         self.isolated_cells: list[dict[str, Any]] = []
 
     def __repr__(self):

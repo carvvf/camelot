@@ -112,6 +112,28 @@ def _replace_cid_placeholders(textline: LTTextLine) -> bool:
     return replaced
 
 
+def _cid_glyph_statistics(textline: LTTextLine) -> tuple[int, int]:
+    """Count total glyphs and unresolved CID placeholders in a textline."""
+    total_chars = 0
+    unresolved = 0
+
+    for obj in getattr(textline, "_objs", []):
+        if isinstance(obj, LTChar):
+            total_chars += 1
+            if _CID_PLACEHOLDER_PATTERN.fullmatch(obj.get_text()):
+                unresolved += 1
+        elif isinstance(obj, LTAnno):
+            value = obj.get_text()
+            if value:
+                total_chars += len(value)
+
+    if total_chars == 0:
+        text = getattr(textline, "get_text", lambda: "")() or ""
+        total_chars = len(text)
+
+    return total_chars, unresolved
+
+
 # https://github.com/pandas-dev/pandas/blob/master/pandas/io/common.py
 def is_url(url):
     """Check to see if a URL has a valid protocol.
@@ -1312,11 +1334,15 @@ def get_table_index(
         +-------+
     """
     raw_text = t.get_text()
-    if "(cid:" in raw_text:
-        if _replace_cid_placeholders(t):
-            raw_text = t.get_text()
-        if "(cid:" in raw_text:
-            table._has_cid_placeholders = True
+    if "(cid:" in raw_text and _replace_cid_placeholders(t):
+        raw_text = t.get_text()
+
+    total_chars, unresolved_cids = _cid_glyph_statistics(t)
+    table._cid_total_count += total_chars
+    table._cid_unresolved_count += unresolved_cids
+    if unresolved_cids:
+        table._has_cid_placeholders = True
+    raw_text = t.get_text()
 
     r_idx, c_idx = [-1] * 2
     for r in range(len(table.rows)):  # noqa

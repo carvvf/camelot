@@ -359,12 +359,18 @@ class BaseParser:
 
             cols, rows, v_s, h_s = self._generate_columns_and_rows(bbox, user_cols)
             table = self._generate_table(table_idx, bbox, cols, rows, v_s=v_s, h_s=h_s)
-            if getattr(table, "_has_cid_placeholders", False):
+            unresolved = getattr(table, "_cid_unresolved_count", 0)
+            total = getattr(table, "_cid_total_count", 0)
+            ratio = (unresolved / total) if total else 0.0
+            if total and ratio > 0.10:
                 table_label = f"table-p{table.page}-o{table.order}"
                 logger.warning(
-                    "Skipping %s (bbox=%s) due to unresolved CID glyphs",
+                    "Skipping %s (bbox=%s) due to unresolved CID glyphs (%d/%d = %.1f%% > 10%%)",
                     table_label,
                     bbox,
+                    unresolved,
+                    total,
+                    ratio * 100.0,
                 )
                 continue
             _tables.append(table)

@@ -2601,13 +2601,6 @@ def _overlay_boxes(
                 max(x1, x2),
                 max(y1, y2),
             )
-            # Translate to the absolute page coordinate system based on mediabox origin.
-            normalized = (
-                normalized[0] + media_x0,
-                normalized[1] + media_y0,
-                normalized[2] + media_x0,
-                normalized[3] + media_y0,
-            )
             if page_rotation == 180:
                 swapped_x = (width - normalized[0], width - normalized[2])
                 swapped_y = (height - normalized[1], height - normalized[3])

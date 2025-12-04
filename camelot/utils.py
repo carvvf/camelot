@@ -421,7 +421,11 @@ def scale(value: float, factor: float) -> float:
     return value * factor
 
 
-def scale_pdf(k, factors):
+def scale_pdf(
+    k: tuple[float, float, float, float],
+    factors: tuple[float, float, float],
+    offsets: tuple[float, float] | None = None,
+):
     """Translate and scale pdf coordinate space to image coordinate space.
 
     Parameters
@@ -434,6 +438,9 @@ def scale_pdf(k, factors):
         Tuple (scaling_factor_x, scaling_factor_y, pdf_y) where the
         first two elements are scaling factors and pdf_y is height of
         pdf.
+    offsets : tuple, optional
+        Tuple (x_offset, y_offset) representing lower-left origin to subtract
+        before scaling (e.g., CropBox origin). Defaults to (0, 0).
 
     Returns
     -------
@@ -443,12 +450,13 @@ def scale_pdf(k, factors):
         space.
 
     """
+    x_offset, y_offset = offsets if offsets is not None else (0.0, 0.0)
     x1, y1, x2, y2 = k
     scaling_factor_x, scaling_factor_y, pdf_y = factors
-    x1 = scale(x1, scaling_factor_x)
-    y1 = scale(abs(translate(-pdf_y, y1)), scaling_factor_y)
-    x2 = scale(x2, scaling_factor_x)
-    y2 = scale(abs(translate(-pdf_y, y2)), scaling_factor_y)
+    x1 = scale(x1 - x_offset, scaling_factor_x)
+    y1 = scale(abs(translate(-pdf_y, y1 - y_offset)), scaling_factor_y)
+    x2 = scale(x2 - x_offset, scaling_factor_x)
+    y2 = scale(abs(translate(-pdf_y, y2 - y_offset)), scaling_factor_y)
     knew = (int(x1), int(y1), int(x2), int(y2))
     return knew
 
@@ -458,6 +466,7 @@ def scale_image(
     v_segments: list[tuple[float, float, float, float]],
     h_segments: list[tuple[float, float, float, float]],
     factors: tuple[float, float, float],
+    offsets: tuple[float, float] | None = None,
 ) -> tuple[
     dict[tuple[float, float, float, float], dict[str, list[tuple[float, float]]]],
     list[tuple[float, float, float, float]],
@@ -480,6 +489,9 @@ def scale_image(
         A tuple (scaling_factor_x, scaling_factor_y, img_y) where the
         first two elements are scaling factors and img_y is the height of
         the image.
+    offsets : tuple, optional
+        Tuple (x_offset, y_offset) to add after scaling back to PDF space
+        (e.g., CropBox origin). Defaults to (0, 0).
 
     Returns
     -------
@@ -492,6 +504,7 @@ def scale_image(
         - h_segments_new: A new list of scaled horizontal segments.
     """
     scaling_factor_x, scaling_factor_y, img_y = factors
+    x_offset, y_offset = offsets if offsets is not None else (0.0, 0.0)
     tables_new = {}
 
     for k in tables.keys():
@@ -506,30 +519,30 @@ def scale_image(
         j_x_scaled = [scale(j, scaling_factor_x) for j in j_x]
         j_y_scaled = [scale(abs(translate(-img_y, j)), scaling_factor_y) for j in j_y]
 
-        tables_new[(x1, y1, x2, y2)] = {
-            "joints": list(zip(j_x_scaled, j_y_scaled))  # noqa B905
+        joints_with_offset = [
+            (jx + x_offset, jy + y_offset) for jx, jy in zip(j_x_scaled, j_y_scaled)
+        ]
+        tables_new[(x1 + x_offset, y1 + y_offset, x2 + x_offset, y2 + y_offset)] = {
+            "joints": joints_with_offset
         }
 
     # Scale vertical segments
     v_segments_new = []
     for v in v_segments:
         x1, x2 = scale(v[0], scaling_factor_x), scale(v[2], scaling_factor_x)
-        y1, y2 = (
-            scale(abs(translate(-img_y, v[1])), scaling_factor_y),
-            scale(abs(translate(-img_y, v[3])), scaling_factor_y),
-        )
-        v_segments_new.append((x1, y1, x2, y2))
+        y1 = scale(abs(translate(-img_y, v[1])), scaling_factor_y)
+        y2 = scale(abs(translate(-img_y, v[3])), scaling_factor_y)
+        v_segments_new.append((x1 + x_offset, y1 + y_offset, x2 + x_offset, y2 + y_offset))
 
     # Scale horizontal segments
     h_segments_new = []
     for h in h_segments:
         x1, x2 = scale(h[0], scaling_factor_x), scale(h[2], scaling_factor_x)
-        y1, y2 = (
-            scale(abs(translate(-img_y, h[1])), scaling_factor_y),
-            scale(abs(translate(-img_y, h[3])), scaling_factor_y),
-        )
-        h_segments_new.append((x1, y1, x2, y2))
+        y1 = scale(abs(translate(-img_y, h[1])), scaling_factor_y)
+        y2 = scale(abs(translate(-img_y, h[3])), scaling_factor_y)
+        h_segments_new.append((x1 + x_offset, y1 + y_offset, x2 + x_offset, y2 + y_offset))
 
+    # Apply offsets to table boundaries after scaling as well
     return tables_new, v_segments_new, h_segments_new
 
 

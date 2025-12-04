@@ -267,7 +267,11 @@ class Lattice(BaseParser):
         return (x1, y1, x2 - x1, y2 - y1)
 
     def _image_regions(
-        self, image_scalers: tuple[float, float, float], width: int, height: int
+        self,
+        image_scalers: tuple[float, float, float],
+        width: int,
+        height: int,
+        offsets: tuple[float, float] | None = None,
     ) -> list[dict[str, Any]]:
         """Return image metadata and bounding boxes expressed in image coordinates."""
         regions: list[dict[str, Any]] = []
@@ -275,7 +279,7 @@ class Lattice(BaseParser):
             bbox = getattr(image, "bbox", None)
             if bbox is None:
                 continue
-            scaled_bbox = scale_pdf(bbox, image_scalers)
+            scaled_bbox = scale_pdf(bbox, image_scalers, offsets=offsets)
             rect = self._rect_from_bbox(scaled_bbox, width, height)
             if rect is None:
                 continue
@@ -316,6 +320,7 @@ class Lattice(BaseParser):
         width: int,
         height: int,
         padding: int = 1,
+        offsets: tuple[float, float] | None = None,
     ) -> list[tuple[int, int, int, int]]:
         """Collect rectangles that cover text glyphs inside candidate areas."""
         if not candidate_regions:
@@ -334,7 +339,7 @@ class Lattice(BaseParser):
             bbox = getattr(textline, "bbox", None)
             if bbox is None:
                 continue
-            scaled_bbox = scale_pdf(bbox, image_scalers)
+            scaled_bbox = scale_pdf(bbox, image_scalers, offsets=offsets)
             rect = self._rect_from_bbox(scaled_bbox, width, height)
             if rect is None:
                 continue
@@ -624,7 +629,9 @@ class Lattice(BaseParser):
             scaled_areas = []
             for area in area_strings:
                 x1, y1, x2, y2 = (float(coord) for coord in area.split(","))
-                scaled_bbox = scale_pdf((x1, y1, x2, y2), image_scalers)
+                scaled_bbox = scale_pdf(
+                    (x1, y1, x2, y2), image_scalers, offsets=(x_offset, y_offset)
+                )
                 rect = self._rect_from_bbox(scaled_bbox, image_width, image_height)
                 if rect is not None:
                     scaled_areas.append(rect)
@@ -648,11 +655,50 @@ class Lattice(BaseParser):
 
         image_width = self.pdf_image.shape[1]
         image_height = self.pdf_image.shape[0]
-        image_width_scaler = image_width / float(self.pdf_width)
-        image_height_scaler = image_height / float(self.pdf_height)
-        pdf_width_scaler = self.pdf_width / float(image_width)
-        pdf_height_scaler = self.pdf_height / float(image_height)
-        image_scalers = (image_width_scaler, image_height_scaler, self.pdf_height)
+
+        def _page_box_offsets():
+            try:
+                from pypdf import PdfReader
+            except Exception:
+                return 0.0, 0.0, float(self.pdf_width), float(self.pdf_height)
+
+            try:
+                page_obj = PdfReader(self.filename, strict=False).pages[0]
+            except Exception:
+                return 0.0, 0.0, float(self.pdf_width), float(self.pdf_height)
+
+            try:
+                cx0, cy0 = page_obj.cropbox.lower_left
+                cx1, cy1 = page_obj.cropbox.upper_right
+                crop_w, crop_h = float(cx1 - cx0), float(cy1 - cy0)
+            except Exception:
+                crop_w = crop_h = None
+                cx0 = cy0 = 0.0
+
+            if crop_w and crop_h and crop_w > 0 and crop_h > 0:
+                offsets_are_zero = abs(cx0) < 1e-6 and abs(cy0) < 1e-6
+                crop_landscape = crop_w >= crop_h
+                layout_landscape = float(self.pdf_width) >= float(self.pdf_height)
+                if offsets_are_zero and crop_landscape != layout_landscape:
+                    # Orientation mismatch after rotation; prefer layout dimensions with zero offset.
+                    return 0.0, 0.0, float(self.pdf_width), float(self.pdf_height)
+                return float(cx0), float(cy0), crop_w, crop_h
+
+            try:
+                mx0, my0 = page_obj.mediabox.lower_left
+                mx1, my1 = page_obj.mediabox.upper_right
+                media_w, media_h = float(mx1 - mx0), float(my1 - my0)
+            except Exception:
+                return 0.0, 0.0, float(self.pdf_width), float(self.pdf_height)
+
+            return float(mx0), float(my0), media_w, media_h
+
+        x_offset, y_offset, effective_pdf_width, effective_pdf_height = _page_box_offsets()
+        image_width_scaler = image_width / effective_pdf_width
+        image_height_scaler = image_height / effective_pdf_height
+        pdf_width_scaler = effective_pdf_width / float(image_width)
+        pdf_height_scaler = effective_pdf_height / float(image_height)
+        image_scalers = (image_width_scaler, image_height_scaler, effective_pdf_height)
         pdf_scalers = (pdf_width_scaler, pdf_height_scaler, image_height)
 
         scaled_table_regions = (
@@ -676,6 +722,7 @@ class Lattice(BaseParser):
                 image_scalers,
                 image_width,
                 image_height,
+                offsets=(x_offset, y_offset),
             )
             if text_regions:
                 page_number = getattr(self, "page", None)
@@ -736,7 +783,9 @@ class Lattice(BaseParser):
 
         cleaned_threshold = self.threshold
         if self.remove_background_artifacts:
-            image_regions = self._image_regions(image_scalers, image_width, image_height)
+            image_regions = self._image_regions(
+                image_scalers, image_width, image_height, offsets=(x_offset, y_offset)
+            )
             candidate_regions: list[tuple[int, int, int, int]] = []
             if scaled_table_areas:
                 candidate_regions.extend(scaled_table_areas)
@@ -805,7 +854,13 @@ class Lattice(BaseParser):
         self.threshold = cleaned_threshold
 
         [self.table_bbox_parses, self.vertical_segments, self.horizontal_segments] = (
-            scale_image(table_bbox, vertical_segments, horizontal_segments, pdf_scalers)
+            scale_image(
+                table_bbox,
+                vertical_segments,
+                horizontal_segments,
+                pdf_scalers,
+                offsets=(x_offset, y_offset),
+            )
         )
 
         for bbox, parse in self.table_bbox_parses.items():

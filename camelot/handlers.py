@@ -260,6 +260,47 @@ class PDFHandler:
             raise ValueError(
                 f"Unsupported normalized rotation angle: {rotation_ccw} degrees."
             )
+
+        def _box_size(box_obj):
+            try:
+                ll = box_obj.lower_left
+                ur = box_obj.upper_right
+                return float(ur[0] - ll[0]), float(ur[1] - ll[1])
+            except Exception:
+                return None
+
+        def _effective_dimensions(pdf_file, fallback_dim, text_objs):
+            try:
+                page_obj = PdfReader(pdf_file, strict=False).pages[0]
+            except Exception:
+                return fallback_dim
+
+            crop_size = _box_size(getattr(page_obj, "cropbox", None))
+            media_size = _box_size(getattr(page_obj, "mediabox", None))
+            chosen = crop_size if crop_size and all(v > 0 for v in crop_size) else media_size
+            if not chosen or not all(v > 0 for v in chosen):
+                return fallback_dim
+
+            try:
+                rotation_val = int(page_obj.get("/Rotate", 0) or 0) % 360
+            except Exception:
+                rotation_val = 0
+            width, height = chosen
+            if rotation_val in (90, 270):
+                width, height = height, width
+
+            if text_objs:
+                max_x = max(getattr(t, "x1", 0) for t in text_objs)
+                max_y = max(getattr(t, "y1", 0) for t in text_objs)
+                tol = 0.05
+                if max_x > width * (1 + tol) or max_y > height * (1 + tol):
+                    return fallback_dim
+
+            return (width, height)
+
+        text_objs = list(horizontal_text) + list(vertical_text)
+        dimensions = _effective_dimensions(fpath, dimensions, text_objs)
+
         return (
             layout,
             dimensions,

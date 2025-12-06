@@ -2368,15 +2368,7 @@ def _overlay_boxes(
     if output_pdf_path.parent:
         output_pdf_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with tables_json_path.open("r", encoding="utf-8") as fp:
-        payload = json.load(fp)
-
-    if not isinstance(payload, dict):
-        raise ValueError("JSON root must be an object containing a 'tables' array")
-
-    tables = payload.get("tables")
-    if not isinstance(tables, list):
-        raise ValueError("JSON payload missing 'tables' array")
+    tables = _load_tables_payload(tables_json_path)
 
     reader = PdfReader(str(input_pdf_path))
     writer = PdfWriter()
@@ -2534,129 +2526,13 @@ def _overlay_boxes(
                         line_annotation[NameObject("/Contents")] = text_label
                     writer.add_annotation(target_index, line_annotation)
 
-        def resolve_bbox(
-            raw_bbox: Any,
-            rotation: int,
-        ) -> tuple[float, float, float, float] | None:
-            def _expand(rect_coords: tuple[float, float, float, float]):
-                x1, y1, x2, y2 = rect_coords
-                return (
-                    math.floor(min(x1, x2)),
-                    math.floor(min(y1, y2)),
-                    math.ceil(max(x1, x2)),
-                    math.ceil(max(y1, y2)),
-                )
-
-            def _as_tuple(values: Any) -> tuple[float, float, float, float] | None:
-                try:
-                    x1, y1, x2, y2 = values
-                except (TypeError, ValueError):
-                    return None
-                try:
-                    return (
-                        float(x1),
-                        float(y1),
-                        float(x2),
-                        float(y2),
-                    )
-                except (TypeError, ValueError):
-                    return None
-
-            rect: tuple[float, float, float, float] | None = None
-            if isinstance(raw_bbox, dict):
-                if {"x1", "y1", "x2", "y2"} <= raw_bbox.keys():
-                    rect = _as_tuple(
-                        (
-                            raw_bbox.get("x1"),
-                            raw_bbox.get("y1"),
-                            raw_bbox.get("x2"),
-                            raw_bbox.get("y2"),
-                        )
-                    )
-                if rect is None:
-                    abs_bbox = raw_bbox.get("abs")
-                    rect = _as_tuple(abs_bbox) if abs_bbox is not None else None
-                if rect is None:
-                    norm_bbox = raw_bbox.get("norm")
-                    if isinstance(norm_bbox, (list, tuple)) and len(norm_bbox) == 4:
-                        normalized = _as_tuple(norm_bbox)
-                        if normalized is not None:
-                            nx1, ny1, nx2, ny2 = normalized
-                            rect = (
-                                nx1 * width,
-                                ny1 * height,
-                                nx2 * width,
-                                ny2 * height,
-                            )
-            elif isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) == 4:
-                rect = _as_tuple(raw_bbox)
-            else:
-                rect = _as_tuple(raw_bbox)
-            if rect is None:
-                return None
-            x1, y1, x2, y2 = rect
-            normalized = (
-                min(x1, x2),
-                min(y1, y2),
-                max(x1, x2),
-                max(y1, y2),
-            )
-            if page_rotation == 180:
-                swapped_x = (width - normalized[0], width - normalized[2])
-                swapped_y = (height - normalized[1], height - normalized[3])
-                normalized = (
-                    min(swapped_x),
-                    min(swapped_y),
-                    max(swapped_x),
-                    max(swapped_y),
-                )
-            if page_rotation == 90:
-                swapped_x = (height - normalized[1], height - normalized[3])
-                swapped_y = (normalized[0], normalized[2])
-                normalized = (
-                    min(swapped_x),
-                    min(swapped_y),
-                    max(swapped_x),
-                    max(swapped_y),
-                )
-            if page_rotation == 270:
-                swapped_x = (normalized[1], normalized[3])
-                swapped_y = (width - normalized[0], width - normalized[2])
-                normalized = (
-                    min(swapped_x),
-                    min(swapped_y),
-                    max(swapped_x),
-                    max(swapped_y),
-                )
-            rotation_mod = int(rotation) % 360
-            if (page_rotation in (0, 180)) and rotation_mod == 270:
-                swapped_x = (normalized[0], normalized[2])
-                swapped_y = (height - normalized[1], height - normalized[3])
-                return _expand(
-                    (
-                        min(swapped_x),
-                        min(swapped_y),
-                        max(swapped_x),
-                        max(swapped_y),
-                    )
-                )
-            if (page_rotation in (90, 270)) and rotation_mod == 270:
-                swapped_x = (height - normalized[0], height - normalized[2])
-                swapped_y = (normalized[1], normalized[3])
-                return _expand(
-                    (
-                        min(swapped_x),
-                        min(swapped_y),
-                        max(swapped_x),
-                        max(swapped_y),
-                    )
-                )
-            return _expand(normalized)
-
         for item in page_items:
-            rect = resolve_bbox(
+            rect = _resolve_pdf_bbox(
                 item.get("bbox"),
-                int(item.get("rotation", 0) or 0),
+                rotation=item.get("rotation"),
+                page_rotation=page_rotation,
+                page_width=width,
+                page_height=height,
             )
             if rect is None:
                 continue
@@ -2716,6 +2592,110 @@ def crop_boxes(
         style=style,
         hatch_diagonals=False,
     )
+
+
+def get_pdf_box(
+    tables_json: os.PathLike[str] | str,
+    table_id: object,
+    input_pdf: os.PathLike[str] | str | None = None,
+) -> tuple[float, float, float, float]:
+    """
+    Return the PDF coordinates of a table's bounding box from a json-coords export.
+
+    This mirrors the coordinate normalization used by :func:`draw_boxes` and
+    :func:`crop_boxes`, accounting for page rotations and normalized bbox values.
+    The PDF path can be passed explicitly or inferred from the table's ``source.file``.
+    """
+
+    tables_json_path = Path(tables_json).expanduser()
+    if not tables_json_path.is_file():
+        raise FileNotFoundError(f"JSON file '{tables_json_path}' not found.")
+
+    page, order = _normalize_table_identifier(table_id)
+    tables = _load_tables_payload(tables_json_path)
+
+    target_table: dict[str, Any] | None = None
+    for table in tables:
+        if not isinstance(table, dict):
+            continue
+        table_page = _coerce_positive_int(table.get("page"))
+        table_order = _coerce_nonnegative_int(table.get("order"))
+        if table_page == page and table_order == order:
+            target_table = table
+            break
+
+    if target_table is None:
+        raise ValueError(
+            f"Table with page={page} and order={order} not found in {tables_json_path}"
+        )
+
+    layout_info = target_table.get("layout") or {}
+    raw_bbox = target_table.get("bbox") or layout_info.get("bbox")
+    if raw_bbox is None:
+        raise ValueError(
+            f"Table with page={page} and order={order} is missing bbox data."
+        )
+
+    rotation_value = target_table.get("rotation")
+    if rotation_value is None and isinstance(layout_info, dict):
+        rotation_value = layout_info.get("rotation")
+
+    try:
+        page_index = int(page) - 1
+    except (TypeError, ValueError):
+        page_index = -1
+
+    inferred_pdf = None
+    if input_pdf is None:
+        inferred_pdf = _resolve_source_pdf_path(target_table, tables_json_path)
+    pdf_path = Path(input_pdf).expanduser() if input_pdf else inferred_pdf
+
+    page_rotation = _extract_page_rotation_pdfinfo(target_table) or 0
+    page_width: float | None = None
+    page_height: float | None = None
+
+    if pdf_path is not None and pdf_path.is_file():
+        from pypdf import PdfReader  # Imported lazily to avoid heavy dependencies at import time.
+
+        reader = PdfReader(str(pdf_path))
+        if page_index < 0 or page_index >= len(reader.pages):
+            raise ValueError(
+                f"PDF page {page} not available in '{pdf_path}' (tables_json={tables_json_path})"
+            )
+        pdf_page = reader.pages[page_index]
+        try:
+            page_rotation = int(pdf_page.get("/Rotate", 0) or 0)
+        except Exception:
+            page_rotation = 0
+        mediabox = pdf_page.mediabox
+        media_width = float(mediabox.width)
+        media_height = float(mediabox.height)
+        if page_rotation in (0, 180):
+            page_width = media_width
+            page_height = media_height
+        else:
+            page_width = media_height
+            page_height = media_width
+    else:
+        page_width, page_height = _extract_page_size(target_table)
+
+    if page_width is None or page_height is None:
+        raise ValueError(
+            "Unable to determine page dimensions. Provide input_pdf or ensure page_size is present."
+        )
+
+    rect = _resolve_pdf_bbox(
+        raw_bbox,
+        rotation=rotation_value,
+        page_rotation=int(page_rotation or 0),
+        page_width=page_width,
+        page_height=page_height,
+    )
+    if rect is None:
+        raise ValueError(
+            f"Could not resolve bounding box for table page={page} order={order}."
+        )
+    return rect
 
 
 _PDFINFO_PAGE_ROTATION = re.compile(r"^Page\s+(\d+)\s+rot:\s+(-?\d+)")
@@ -2950,6 +2930,15 @@ def _coerce_positive_int(value: object) -> Optional[int]:
     return candidate if candidate > 0 else None
 
 
+def _coerce_nonnegative_int(value: object) -> Optional[int]:
+    """Convert arbitrary values to non-negative integers when possible."""
+    try:
+        candidate = int(value)
+    except (TypeError, ValueError):
+        return None
+    return candidate if candidate >= 0 else None
+
+
 def _collect_pdfinfo_page_rotations(
     pdf_path: Path,
     pages: Sequence[int],
@@ -3056,6 +3045,227 @@ def _extract_spanning_cells(table: dict) -> List:
     layout_info = table.get("layout") or {}
     spans = layout_info.get("logical_cells")
     return spans if isinstance(spans, list) else []
+
+
+def _normalize_table_identifier(table_id: object) -> tuple[int, int]:
+    """Convert flexible table identifiers to (page, order)."""
+
+    def _normalize_pair(page_value: object, order_value: object) -> tuple[int, int]:
+        page = _coerce_positive_int(page_value)
+        order = _coerce_nonnegative_int(order_value)
+        if page is None or order is None:
+            raise ValueError(
+                "Table identifier must include a valid page (>0) and order (>=0)."
+            )
+        return page, order
+
+    if isinstance(table_id, (list, tuple)) and len(table_id) >= 2:
+        return _normalize_pair(table_id[0], table_id[1])
+
+    if isinstance(table_id, dict):
+        return _normalize_pair(table_id.get("page"), table_id.get("order"))
+
+    if isinstance(table_id, str):
+        normalized = table_id.strip()
+        patterns = [
+            r"table-p(?P<page>\d+)-o(?P<order>\d+)",
+            r"p(?P<page>\d+)-o(?P<order>\d+)",
+            r"(?P<page>\d+)[,.:/_-]+(?P<order>\d+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, normalized, flags=re.IGNORECASE)
+            if match:
+                return _normalize_pair(match.group("page"), match.group("order"))
+        segments = re.split(r"[\s,;:]+", normalized)
+        if len(segments) == 2:
+            return _normalize_pair(segments[0], segments[1])
+
+    raise ValueError(
+        "Unsupported table identifier. Use (page, order) or a string like 'p1-o2'."
+    )
+
+
+def _extract_page_size(table: Mapping[str, object]) -> tuple[Optional[float], Optional[float]]:
+    """Return page dimensions from the payload when available."""
+    layout_info = table.get("layout") if isinstance(table, Mapping) else None
+    page_size = layout_info.get("page_size") if isinstance(layout_info, Mapping) else None
+    if not page_size:
+        page_size = table.get("pdf_size") if isinstance(table, Mapping) else None
+    if isinstance(page_size, (list, tuple)) and len(page_size) >= 2:
+        try:
+            return float(page_size[0]), float(page_size[1])
+        except (TypeError, ValueError):
+            return (None, None)
+    if not isinstance(page_size, Mapping):
+        return (None, None)
+    try:
+        width = float(page_size.get("width"))
+        height = float(page_size.get("height"))
+    except (TypeError, ValueError):
+        return (None, None)
+    return (width, height)
+
+
+def _load_tables_payload(tables_json_path: Path) -> List[dict[str, Any]]:
+    """Read and validate a json-coords payload."""
+    with tables_json_path.open("r", encoding="utf-8") as fp:
+        payload = json.load(fp)
+
+    if not isinstance(payload, dict):
+        raise ValueError("JSON root must be an object containing a 'tables' array")
+
+    tables = payload.get("tables")
+    if not isinstance(tables, list):
+        raise ValueError("JSON payload missing 'tables' array")
+    return tables
+
+
+def _resolve_source_pdf_path(table_entry: Mapping[str, object], tables_json_path: Path) -> Path | None:
+    """Infer the PDF path from the table entry."""
+    source_info = table_entry.get("source") if isinstance(table_entry, Mapping) else None
+    pdf_path_value = source_info.get("file") if isinstance(source_info, Mapping) else None
+    if not pdf_path_value:
+        return None
+    pdf_path = Path(str(pdf_path_value)).expanduser()
+    if not pdf_path.is_absolute():
+        candidate = (tables_json_path.parent / pdf_path).resolve()
+        pdf_path = candidate if candidate.exists() else pdf_path
+    return pdf_path if pdf_path.exists() else None
+
+
+def _resolve_pdf_bbox(
+    raw_bbox: Any,
+    *,
+    rotation: object,
+    page_rotation: int,
+    page_width: float,
+    page_height: float,
+) -> tuple[float, float, float, float] | None:
+    """Convert a Camelot bbox entry into PDF coordinates."""
+
+    if page_width is None or page_height is None:
+        raise ValueError("Page dimensions are required to resolve bounding boxes.")
+
+    def _expand(rect_coords: tuple[float, float, float, float]):
+        x1, y1, x2, y2 = rect_coords
+        return (
+            math.floor(min(x1, x2)),
+            math.floor(min(y1, y2)),
+            math.ceil(max(x1, x2)),
+            math.ceil(max(y1, y2)),
+        )
+
+    def _as_tuple(values: Any) -> tuple[float, float, float, float] | None:
+        try:
+            x1, y1, x2, y2 = values
+        except (TypeError, ValueError):
+            return None
+        try:
+            return (
+                float(x1),
+                float(y1),
+                float(x2),
+                float(y2),
+            )
+        except (TypeError, ValueError):
+            return None
+
+    rect: tuple[float, float, float, float] | None = None
+    if isinstance(raw_bbox, dict):
+        if {"x1", "y1", "x2", "y2"} <= raw_bbox.keys():
+            rect = _as_tuple(
+                (
+                    raw_bbox.get("x1"),
+                    raw_bbox.get("y1"),
+                    raw_bbox.get("x2"),
+                    raw_bbox.get("y2"),
+                )
+            )
+        if rect is None:
+            abs_bbox = raw_bbox.get("abs")
+            rect = _as_tuple(abs_bbox) if abs_bbox is not None else None
+        if rect is None:
+            norm_bbox = raw_bbox.get("norm")
+            if isinstance(norm_bbox, (list, tuple)) and len(norm_bbox) == 4:
+                normalized = _as_tuple(norm_bbox)
+                if normalized is not None:
+                    nx1, ny1, nx2, ny2 = normalized
+                    rect = (
+                        nx1 * page_width,
+                        ny1 * page_height,
+                        nx2 * page_width,
+                        ny2 * page_height,
+                    )
+    elif isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) == 4:
+        rect = _as_tuple(raw_bbox)
+    else:
+        rect = _as_tuple(raw_bbox)
+    if rect is None:
+        return None
+
+    try:
+        rotation_value = int(rotation or 0)
+    except (TypeError, ValueError):
+        rotation_value = 0
+
+    x1, y1, x2, y2 = rect
+    normalized = (
+        min(x1, x2),
+        min(y1, y2),
+        max(x1, x2),
+        max(y1, y2),
+    )
+    if page_rotation == 180:
+        swapped_x = (page_width - normalized[0], page_width - normalized[2])
+        swapped_y = (page_height - normalized[1], page_height - normalized[3])
+        normalized = (
+            min(swapped_x),
+            min(swapped_y),
+            max(swapped_x),
+            max(swapped_y),
+        )
+    if page_rotation == 90:
+        swapped_x = (page_height - normalized[1], page_height - normalized[3])
+        swapped_y = (normalized[0], normalized[2])
+        normalized = (
+            min(swapped_x),
+            min(swapped_y),
+            max(swapped_x),
+            max(swapped_y),
+        )
+    if page_rotation == 270:
+        swapped_x = (normalized[1], normalized[3])
+        swapped_y = (page_width - normalized[0], page_width - normalized[2])
+        normalized = (
+            min(swapped_x),
+            min(swapped_y),
+            max(swapped_x),
+            max(swapped_y),
+        )
+    rotation_mod = int(rotation_value) % 360
+    if (page_rotation in (0, 180)) and rotation_mod == 270:
+        swapped_x = (normalized[0], normalized[2])
+        swapped_y = (page_height - normalized[1], page_height - normalized[3])
+        return _expand(
+            (
+                min(swapped_x),
+                min(swapped_y),
+                max(swapped_x),
+                max(swapped_y),
+            )
+        )
+    if (page_rotation in (90, 270)) and rotation_mod == 270:
+        swapped_x = (page_height - normalized[0], page_height - normalized[2])
+        swapped_y = (normalized[1], normalized[3])
+        return _expand(
+            (
+                min(swapped_x),
+                min(swapped_y),
+                max(swapped_x),
+                max(swapped_y),
+            )
+        )
+    return _expand(normalized)
 
 
 def _cell_coord_key(entry: object) -> Optional[Tuple[int, int, int, int]]:

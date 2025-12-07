@@ -78,6 +78,9 @@
         "page_rotation_pdfinfo": {
           "type": "integer"
         },
+        "page_boxes": {
+          "$ref": "#/$defs/PageBoxes"
+        },
         "grid": {
           "$ref": "#/$defs/Grid"
         },
@@ -171,6 +174,45 @@
         },
         "height": {
           "type": "number"
+        }
+      }
+    },
+    "Point": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "PageBox": {
+      "type": "object",
+      "required": [
+        "origin",
+        "size"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/Point"
+        },
+        "size": {
+          "$ref": "#/$defs/PageSize"
+        },
+        "bounds": {
+          "$ref": "#/$defs/Quadruple"
+        }
+      }
+    },
+    "PageBoxes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mediabox": {
+          "$ref": "#/$defs/PageBox"
+        },
+        "cropbox": {
+          "$ref": "#/$defs/PageBox"
         }
       }
     },

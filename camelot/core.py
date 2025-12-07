@@ -577,6 +577,7 @@ class Table:
         self.page = None
         self.flavor = None  # Flavor of the parser that generated the table
         self.pdf_size = None  # Dimensions of the original PDF page
+        self.page_boxes = None  # Media/Crop box info (origins, sizes)
         self.rotation = 0  # Page rotation applied during parsing (degrees)
         self._bbox = None  # Bounding box in original document
         self.parse = None  # Parse information
@@ -1413,6 +1414,65 @@ class Table:
                 payload["page_rotation_pdfinfo"] = int(self.pdfinfo_rotation)
             except (TypeError, ValueError):
                 payload["page_rotation_pdfinfo"] = self.pdfinfo_rotation
+
+        def _export_page_box(box_info: Any) -> Optional[Dict[str, Any]]:
+            if not isinstance(box_info, Mapping):
+                return None
+            origin_values = box_info.get("origin")
+            bounds_values = box_info.get("bounds")
+            size_values = box_info.get("size")
+
+            origin: Optional[List[float]] = None
+            if isinstance(origin_values, (list, tuple)) and len(origin_values) >= 2:
+                try:
+                    origin = [float(origin_values[0]), float(origin_values[1])]
+                except (TypeError, ValueError):
+                    origin = None
+            size: Optional[Dict[str, float]] = None
+            if isinstance(size_values, Mapping):
+                try:
+                    width = float(size_values.get("width"))
+                    height = float(size_values.get("height"))
+                    size = {"width": width, "height": height}
+                except (TypeError, ValueError):
+                    size = None
+            elif isinstance(size_values, (list, tuple)) and len(size_values) >= 2:
+                try:
+                    size = {"width": float(size_values[0]), "height": float(size_values[1])}
+                except (TypeError, ValueError):
+                    size = None
+            bounds: Optional[List[float]] = None
+            if isinstance(bounds_values, (list, tuple)) and len(bounds_values) >= 4:
+                try:
+                    bounds = [
+                        float(bounds_values[0]),
+                        float(bounds_values[1]),
+                        float(bounds_values[2]),
+                        float(bounds_values[3]),
+                    ]
+                except (TypeError, ValueError):
+                    bounds = None
+
+            box_payload: Dict[str, Any] = {}
+            if origin:
+                box_payload["origin"] = origin
+            if size:
+                box_payload["size"] = size
+            if bounds:
+                box_payload["bounds"] = bounds
+            return box_payload or None
+
+        page_boxes_payload: Dict[str, Any] = {}
+        raw_page_boxes = getattr(self, "page_boxes", None)
+        if isinstance(raw_page_boxes, Mapping):
+            media_payload = _export_page_box(raw_page_boxes.get("mediabox"))
+            crop_payload = _export_page_box(raw_page_boxes.get("cropbox"))
+            if media_payload:
+                page_boxes_payload["mediabox"] = media_payload
+            if crop_payload:
+                page_boxes_payload["cropbox"] = crop_payload
+        if page_boxes_payload:
+            payload["page_boxes"] = page_boxes_payload
         pdf_size_entry: Optional[Dict[str, float]] = None
         if (
             self.pdf_size is not None
@@ -3801,6 +3861,41 @@ def generate_html_report(
             return False
         return any(token in normalized for token in iso_texts)
 
+    def _format_point(point: object) -> str | None:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            return None
+        try:
+            return f"({_format_metric(point[0])}, {_format_metric(point[1])})"
+        except Exception:
+            return None
+
+    def _format_size_entry(size_entry: object) -> str | None:
+        if isinstance(size_entry, Mapping):
+            width = size_entry.get("width")
+            height = size_entry.get("height")
+        elif isinstance(size_entry, (list, tuple)) and len(size_entry) >= 2:
+            width, height = size_entry[0], size_entry[1]
+        else:
+            return None
+        try:
+            return f"{_format_metric(width)} x {_format_metric(height)}"
+        except Exception:
+            return None
+
+    def _summarize_page_box(label: str, box_entry: object) -> str | None:
+        if not isinstance(box_entry, Mapping):
+            return None
+        origin_desc = _format_point(box_entry.get("origin"))
+        size_desc = _format_size_entry(box_entry.get("size"))
+        details: List[str] = []
+        if origin_desc:
+            details.append(f"origin {origin_desc}")
+        if size_desc:
+            details.append(f"size {size_desc}")
+        if not details:
+            return None
+        return f"{label}: " + ", ".join(details)
+
     def _compute_uniformity_from_data(
         table_entry: Mapping[str, object] | object,
     ) -> Dict[str, object] | None:
@@ -4009,6 +4104,7 @@ def generate_html_report(
             rotation = _extract_table_rotation(table)
             layout_info = table.get("layout") or {}
             grid_info = table.get("grid") or {}
+            page_boxes = table.get("page_boxes") if isinstance(table, dict) else None
             indicators = layout_info.get("indicators")
             jc_indicator = None
             rect_indicator = None
@@ -4031,6 +4127,16 @@ def generate_html_report(
             page_rotation = _extract_page_rotation_pdfinfo(table)
             if page_rotation is None and normalized_page is not None:
                 page_rotation = page_rotations.get(normalized_page)
+            media_box_summary = (
+                _summarize_page_box("MediaBox", page_boxes.get("mediabox"))
+                if isinstance(page_boxes, Mapping)
+                else None
+            )
+            crop_box_summary = (
+                _summarize_page_box("CropBox", page_boxes.get("cropbox"))
+                if isinstance(page_boxes, Mapping)
+                else None
+            )
 
             section_title = f"Table {index} — page {page_display} (order {order})"
             html_lines.append("<section class=\"table-block\">")
@@ -4077,6 +4183,10 @@ def generate_html_report(
                     count_bits.append(f"logical {logical_cells}")
                 if count_bits:
                     meta_bits.append("layout cell_count: " + ", ".join(count_bits))
+            if media_box_summary:
+                meta_bits.append(media_box_summary)
+            if crop_box_summary:
+                meta_bits.append(crop_box_summary)
             if stats:
                 accuracy = stats.get("accuracy")
                 whitespace = stats.get("whitespace")

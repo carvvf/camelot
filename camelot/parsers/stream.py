@@ -95,6 +95,7 @@ class Stream(TextBaseParser):
         layout_kwargs,
         source_filepath=None,
         source_page_rotation=None,
+        page_boxes=None,
     ):
         super().prepare_page_parse(
             filename,
@@ -108,6 +109,7 @@ class Stream(TextBaseParser):
             layout_kwargs=layout_kwargs,
             source_filepath=source_filepath,
             source_page_rotation=source_page_rotation,
+            page_boxes=page_boxes,
         )
         if self.remove_background_artifacts:
             self._background_regions = [

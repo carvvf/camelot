@@ -128,6 +128,7 @@ class Autotune:
         layout_kwargs,
         source_filepath=None,
         source_page_rotation=None,
+        page_boxes=None,
     ):
         """Prepare all autotune parsers for parsing."""
         for parser in self._parsers.values():
@@ -143,6 +144,7 @@ class Autotune:
                 layout_kwargs=layout_kwargs,
                 source_filepath=source_filepath,
                 source_page_rotation=source_page_rotation,
+                page_boxes=page_boxes,
             )
 
     def _table_sort_key(self, table):

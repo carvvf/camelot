@@ -114,6 +114,7 @@ class Hybrid(BaseParser):
         layout_kwargs,
         source_filepath=None,
         source_page_rotation=None,
+        page_boxes=None,
     ):
         """Call this method to prepare the page parsing .
 
@@ -142,6 +143,7 @@ class Hybrid(BaseParser):
             layout_kwargs=layout_kwargs,
             source_filepath=source_filepath,
             source_page_rotation=source_page_rotation,
+            page_boxes=page_boxes,
         )
         self.network_parser.prepare_page_parse(
             filename,
@@ -155,6 +157,7 @@ class Hybrid(BaseParser):
             layout_kwargs=layout_kwargs,
             source_filepath=source_filepath,
             source_page_rotation=source_page_rotation,
+            page_boxes=page_boxes,
         )
         self.lattice_parser.prepare_page_parse(
             filename,
@@ -168,6 +171,7 @@ class Hybrid(BaseParser):
             layout_kwargs=layout_kwargs,
             source_filepath=source_filepath,
             source_page_rotation=source_page_rotation,
+            page_boxes=page_boxes,
         )
 
     def _generate_columns_and_rows(self, bbox, user_cols):

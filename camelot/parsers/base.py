@@ -86,6 +86,7 @@ class BaseParser:
         layout_kwargs,
         source_filepath=None,
         source_page_rotation=None,
+        page_boxes=None,
     ):
         """Prepare the page for parsing."""
         self.filename = os.fsdecode(filename)
@@ -117,6 +118,7 @@ class BaseParser:
             )
         except (TypeError, ValueError):
             self.page_rotation_pdfinfo = None
+        self.page_boxes = page_boxes
         self.rootname, __ = os.path.splitext(self.filename)
 
         if self.parse_details is not None:
@@ -410,6 +412,7 @@ class BaseParser:
 
         table.whitespace = compute_whitespace(data)
         table.pdf_size = (self.pdf_width, self.pdf_height)
+        table.page_boxes = getattr(self, "page_boxes", None)
 
         _text = []
         _text.extend([(t.x0, t.y0, t.x1, t.y1) for t in self.horizontal_text])

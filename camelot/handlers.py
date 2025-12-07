@@ -157,7 +157,7 @@ class PDFHandler:
 
     def _save_page(
         self, filepath: StrByteType | Path, page: int, temp: str, **layout_kwargs
-        ) -> tuple[
+    ) -> tuple[
             Any,
             tuple[float, float],
             list[LTImage],
@@ -165,6 +165,7 @@ class PDFHandler:
             list[LTTextLineHorizontal],
             list[LTTextLineVertical],
             int,
+            dict[str, dict[str, object]] | None,
         ]:
         """Saves specified page from PDF into a temporary directory.
 
@@ -261,6 +262,37 @@ class PDFHandler:
                 f"Unsupported normalized rotation angle: {rotation_ccw} degrees."
             )
 
+        def _extract_box_metadata(box_obj):
+            try:
+                llx, lly = box_obj.lower_left
+                urx, ury = box_obj.upper_right
+            except Exception:
+                return None
+            try:
+                x0 = float(llx)
+                y0 = float(lly)
+                x1 = float(urx)
+                y1 = float(ury)
+            except Exception:
+                return None
+            x_min, x_max = sorted((x0, x1))
+            y_min, y_max = sorted((y0, y1))
+            return {
+                "origin": (x_min, y_min),
+                "size": {"width": float(x_max - x_min), "height": float(y_max - y_min)},
+                "bounds": (x_min, y_min, x_max, y_max),
+            }
+
+        page_boxes: dict[str, dict[str, object]] | None = None
+        media_meta = _extract_box_metadata(getattr(p, "mediabox", None))
+        crop_meta = _extract_box_metadata(getattr(p, "cropbox", None))
+        if media_meta or crop_meta:
+            page_boxes = {}
+            if media_meta:
+                page_boxes["mediabox"] = media_meta
+            if crop_meta:
+                page_boxes["cropbox"] = crop_meta
+
         def _box_size(box_obj):
             try:
                 ll = box_obj.lower_left
@@ -310,6 +342,7 @@ class PDFHandler:
             vertical_text,
             rotation_ccw,
             pdfinfo_page_rotation,
+            page_boxes,
         )
 
     def parse(
@@ -449,9 +482,8 @@ class PDFHandler:
             vertical_text,
             rotation_angle,
             pdfinfo_page_rotation,
-        ) = (
-            self._save_page(self.filepath, page, tempdir, **layout_kwargs)
-        )
+            page_boxes,
+        ) = (self._save_page(self.filepath, page, tempdir, **layout_kwargs))
         page_path = os.path.join(tempdir, f"page-{page}.pdf")
         try:
             source_filepath = os.path.abspath(os.fsdecode(self.filepath))
@@ -469,6 +501,7 @@ class PDFHandler:
             layout_kwargs=layout_kwargs,
             source_filepath=source_filepath,
             source_page_rotation=pdfinfo_page_rotation,
+            page_boxes=page_boxes,
         )
         tables = parser.extract_tables()
         return tables

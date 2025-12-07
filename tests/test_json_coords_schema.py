@@ -31,6 +31,11 @@ def test_json_coords_payload_matches_schema(testdir, tmp_path):
     validator.validate(payload)
 
     first_table = payload["tables"][0]
+    page_boxes = first_table.get("page_boxes") or {}
+    assert "mediabox" in page_boxes, "expected mediabox metadata in json-coords payload"
+    mediabox = page_boxes["mediabox"]
+    assert mediabox.get("origin") is not None
+    assert mediabox.get("size") is not None
     layout = first_table.get("layout", {})
     first_table["isolated_cells"] = [
         {"bbox": {"x1": 0.0, "y1": 0.0, "x2": 10.0, "y2": 5.0}, "texts": ["iso"]}

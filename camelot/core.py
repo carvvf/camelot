@@ -2655,94 +2655,63 @@ def crop_boxes(
 
 
 def get_pdf_box(
-    tables_json: os.PathLike[str] | str,
-    table_id: object,
-    input_pdf: os.PathLike[str] | str | None = None,
+    camelot_artifact: os.PathLike[str] | str | Mapping[str, Any],
 ) -> tuple[float, float, float, float]:
     """
-    Return the PDF coordinates of a table's bounding box from a json-coords export.
+    Return the PDF coordinates of a table's bounding box from a single-table artifact.
 
-    This mirrors the coordinate normalization used by :func:`draw_boxes` and
-    :func:`crop_boxes`, accounting for page rotations and normalized bbox values.
-    The PDF path can be passed explicitly or inferred from the table's ``source.file``.
+    The artifact can be a path to a json-coords payload (single table) or an already
+    loaded dict. The function validates that exactly one table is present and uses the
+    embedded page geometry (page size, rotation, bbox) to resolve PDF-space coords,
+    without needing the original PDF file.
     """
 
-    tables_json_path = Path(tables_json).expanduser()
-    if not tables_json_path.is_file():
-        raise FileNotFoundError(f"JSON file '{tables_json_path}' not found.")
+    artifact_payload: Mapping[str, Any]
+    if isinstance(camelot_artifact, (str, os.PathLike)):
+        tables_json_path = Path(camelot_artifact).expanduser()
+        if not tables_json_path.is_file():
+            raise FileNotFoundError(f"JSON file '{tables_json_path}' not found.")
+        with tables_json_path.open("r", encoding="utf-8") as fp:
+            artifact_payload = json.load(fp)
+    elif isinstance(camelot_artifact, Mapping):
+        artifact_payload = camelot_artifact
+    else:
+        raise TypeError("camelot_artifact must be a path or mapping representing the payload.")
 
-    page, order = _normalize_table_identifier(table_id)
-    tables = _load_tables_payload(tables_json_path)
+    def _extract_single_table(payload: object) -> Mapping[str, Any]:
+        if isinstance(payload, Mapping):
+            tables_obj = payload.get("tables")
+            if tables_obj is None:
+                return payload  # Assume payload itself is a table entry.
+            if not isinstance(tables_obj, list):
+                raise ValueError("Invalid artifact: 'tables' must be a list.")
+            if len(tables_obj) != 1:
+                raise ValueError("camelot_artifact must contain exactly one table.")
+            table_entry = tables_obj[0]
+            if not isinstance(table_entry, Mapping):
+                raise ValueError("Invalid artifact: table entry must be an object.")
+            return table_entry
+        if isinstance(payload, list):
+            if len(payload) != 1 or not isinstance(payload[0], Mapping):
+                raise ValueError("camelot_artifact must contain exactly one table.")
+            return payload[0]
+        raise ValueError("Invalid artifact: expected a mapping or a list with one table.")
 
-    target_table: dict[str, Any] | None = None
-    for table in tables:
-        if not isinstance(table, dict):
-            continue
-        table_page = _coerce_positive_int(table.get("page"))
-        table_order = _coerce_nonnegative_int(table.get("order"))
-        if table_page == page and table_order == order:
-            target_table = table
-            break
-
-    if target_table is None:
-        raise ValueError(
-            f"Table with page={page} and order={order} not found in {tables_json_path}"
-        )
-
+    target_table = _extract_single_table(artifact_payload)
     layout_info = target_table.get("layout") or {}
     raw_bbox = target_table.get("bbox") or layout_info.get("bbox")
     if raw_bbox is None:
-        raise ValueError(
-            f"Table with page={page} and order={order} is missing bbox data."
-        )
+        raise ValueError("Table entry is missing bbox data.")
 
     rotation_value = target_table.get("rotation")
     if rotation_value is None and isinstance(layout_info, dict):
         rotation_value = layout_info.get("rotation")
 
-    try:
-        page_index = int(page) - 1
-    except (TypeError, ValueError):
-        page_index = -1
-
-    inferred_pdf = None
-    if input_pdf is None:
-        inferred_pdf = _resolve_source_pdf_path(target_table, tables_json_path)
-    pdf_path = Path(input_pdf).expanduser() if input_pdf else inferred_pdf
-
     page_rotation = _extract_page_rotation_pdfinfo(target_table) or 0
-    page_width: float | None = None
-    page_height: float | None = None
-
-    if pdf_path is not None and pdf_path.is_file():
-        from pypdf import PdfReader  # Imported lazily to avoid heavy dependencies at import time.
-
-        reader = PdfReader(str(pdf_path))
-        if page_index < 0 or page_index >= len(reader.pages):
-            raise ValueError(
-                f"PDF page {page} not available in '{pdf_path}' (tables_json={tables_json_path})"
-            )
-        pdf_page = reader.pages[page_index]
-        try:
-            page_rotation = int(pdf_page.get("/Rotate", 0) or 0)
-        except Exception:
-            page_rotation = 0
-        mediabox = pdf_page.mediabox
-        media_width = float(mediabox.width)
-        media_height = float(mediabox.height)
-        if page_rotation in (0, 180):
-            page_width = media_width
-            page_height = media_height
-        else:
-            page_width = media_height
-            page_height = media_width
-    else:
-        page_width, page_height = _extract_page_size(target_table)
+    page_width, page_height = _extract_page_size(target_table)
 
     if page_width is None or page_height is None:
-        raise ValueError(
-            "Unable to determine page dimensions. Provide input_pdf or ensure page_size is present."
-        )
+        raise ValueError("Unable to determine page dimensions from the artifact.")
 
     rect = _resolve_pdf_bbox(
         raw_bbox,
@@ -2752,9 +2721,7 @@ def get_pdf_box(
         page_height=page_height,
     )
     if rect is None:
-        raise ValueError(
-            f"Could not resolve bounding box for table page={page} order={order}."
-        )
+        raise ValueError("Could not resolve bounding box from the artifact.")
     return rect
 
 
@@ -3163,7 +3130,27 @@ def _extract_page_size(table: Mapping[str, object]) -> tuple[Optional[float], Op
         height = float(page_size.get("height"))
     except (TypeError, ValueError):
         return (None, None)
-    return (width, height)
+    if width is not None and height is not None:
+        return (width, height)
+
+    page_boxes = table.get("page_boxes") if isinstance(table, Mapping) else None
+    box_candidates = []
+    if isinstance(page_boxes, Mapping):
+        for key in ("cropbox", "mediabox"):
+            box_entry = page_boxes.get(key)
+            if isinstance(box_entry, Mapping):
+                size_entry = box_entry.get("size")
+                if isinstance(size_entry, Mapping):
+                    box_candidates.append(size_entry)
+    for size_entry in box_candidates:
+        try:
+            width_val = float(size_entry.get("width"))
+            height_val = float(size_entry.get("height"))
+        except (TypeError, ValueError):
+            continue
+        return (width_val, height_val)
+
+    return (None, None)
 
 
 def _load_tables_payload(tables_json_path: Path) -> List[dict[str, Any]]:

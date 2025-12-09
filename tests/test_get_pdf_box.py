@@ -39,6 +39,31 @@ def _artifact_with_norm_bbox_and_rotation():
     }
 
 
+def _artifact_with_crop_offset_and_rotation():
+    return {
+        "tables": [
+            {
+                "page": 1,
+                "order": 1,
+                "bbox": {"x1": 10, "y1": 10, "x2": 30, "y2": 20},
+                "rotation": 0,
+                "layout": {"page_size": {"width": 100, "height": 50}, "rotation": 0},
+                "page_rotation_pdfinfo": 90,
+                "page_boxes": {
+                    "mediabox": {
+                        "origin": [0.0, 0.0],
+                        "size": {"width": 120.0, "height": 70.0},
+                    },
+                    "cropbox": {
+                        "origin": [10.0, 0.0],
+                        "size": {"width": 100.0, "height": 50.0},
+                    },
+                },
+            }
+        ]
+    }
+
+
 def test_get_pdf_box_returns_abs_bbox_for_single_table(tmp_path):
     artifact = _artifact_with_abs_bbox()
     artifact_path = tmp_path / "artifact.json"
@@ -77,3 +102,12 @@ def test_get_pdf_box_requires_single_table(tmp_path):
         assert False, "expected ValueError for multi-table artifact"
     except ValueError:
         pass
+
+
+def test_get_pdf_box_accounts_for_crop_origin(tmp_path):
+    artifact = _artifact_with_crop_offset_and_rotation()
+    artifact_path = tmp_path / "artifact_crop.json"
+    artifact_path.write_text(json.dumps(artifact))
+
+    rotated_box = get_pdf_box(artifact_path)
+    assert rotated_box == (40, 0, 50, 20)

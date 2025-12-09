@@ -2449,10 +2449,14 @@ def _overlay_boxes(
         rotation_value = table.get("rotation")
         if rotation_value is None:
             rotation_value = layout_info.get("rotation")
+        page_width, page_height, page_origin = _extract_page_geometry(table)
         annotations_by_page.setdefault(page_index, []).append(
             {
                 "bbox": bbox,
                 "rotation": int(rotation_value or 0),
+                "page_width": page_width,
+                "page_height": page_height,
+                "page_origin": page_origin,
             }
         )
 
@@ -2505,17 +2509,26 @@ def _overlay_boxes(
         page_rotation = int(page.get("/Rotate", 0) or 0)
         page_items = annotations_by_page.get(page_index, [])
 
-        mediabox = page.mediabox
-        media_width = float(mediabox.width)
-        media_height = float(mediabox.height)
-        media_x0 = float(mediabox.left)
-        media_y0 = float(mediabox.bottom)
-        if page_rotation in (0, 180):
-            width = media_width
-            height = media_height
-        else:
-            width = media_height
-            height = media_width
+        def _box_geometry(box_obj):
+            try:
+                return (
+                    float(box_obj.width),
+                    float(box_obj.height),
+                    (float(box_obj.left), float(box_obj.bottom)),
+                )
+            except Exception:
+                return (None, None, None)
+
+        media_width, media_height, media_origin = _box_geometry(getattr(page, "mediabox", None))
+        crop_width, crop_height, crop_origin = _box_geometry(getattr(page, "cropbox", None))
+
+        fallback_width = crop_width if crop_width is not None else media_width
+        fallback_height = crop_height if crop_height is not None else media_height
+        fallback_origin = (
+            crop_origin
+            if crop_width is not None and crop_height is not None and crop_origin is not None
+            else media_origin
+        )
 
         def build_annotation(
             rect: tuple[float, float, float, float],
@@ -2587,12 +2600,19 @@ def _overlay_boxes(
                     writer.add_annotation(target_index, line_annotation)
 
         for item in page_items:
+            page_width = item.get("page_width") or fallback_width
+            page_height = item.get("page_height") or fallback_height
+            page_origin = item.get("page_origin") or fallback_origin
+            if page_width is None or page_height is None:
+                continue
+
             rect = _resolve_pdf_bbox(
                 item.get("bbox"),
                 rotation=item.get("rotation"),
                 page_rotation=page_rotation,
-                page_width=width,
-                page_height=height,
+                page_width=page_width,
+                page_height=page_height,
+                page_origin=page_origin,
             )
             if rect is None:
                 continue
@@ -2708,7 +2728,7 @@ def get_pdf_box(
         rotation_value = layout_info.get("rotation")
 
     page_rotation = _extract_page_rotation_pdfinfo(target_table) or 0
-    page_width, page_height = _extract_page_size(target_table)
+    page_width, page_height, page_origin = _extract_page_geometry(target_table)
 
     if page_width is None or page_height is None:
         raise ValueError("Unable to determine page dimensions from the artifact.")
@@ -2719,6 +2739,7 @@ def get_pdf_box(
         page_rotation=int(page_rotation or 0),
         page_width=page_width,
         page_height=page_height,
+        page_origin=page_origin,
     )
     if rect is None:
         raise ValueError("Could not resolve bounding box from the artifact.")
@@ -3153,6 +3174,61 @@ def _extract_page_size(table: Mapping[str, object]) -> tuple[Optional[float], Op
     return (None, None)
 
 
+def _extract_page_geometry(table: Mapping[str, object]) -> tuple[Optional[float], Optional[float], Optional[tuple[float, float]]]:
+    """Return page width/height along with the origin of the matching page box."""
+    page_width, page_height = _extract_page_size(table)
+    origin: Optional[tuple[float, float]] = None
+
+    def _parse_origin(candidate: object) -> Optional[tuple[float, float]]:
+        if not isinstance(candidate, (list, tuple)) or len(candidate) < 2:
+            return None
+        try:
+            return (float(candidate[0]), float(candidate[1]))
+        except (TypeError, ValueError):
+            return None
+
+    def _parse_size(candidate: object) -> Optional[tuple[float, float]]:
+        if isinstance(candidate, Mapping):
+            try:
+                return (float(candidate.get("width")), float(candidate.get("height")))
+            except (TypeError, ValueError):
+                return None
+        if isinstance(candidate, (list, tuple)) and len(candidate) >= 2:
+            try:
+                return (float(candidate[0]), float(candidate[1]))
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    page_boxes = table.get("page_boxes") if isinstance(table, Mapping) else None
+    candidates: list[tuple[Optional[tuple[float, float]], Optional[tuple[float, float]]]] = []
+    if isinstance(page_boxes, Mapping):
+        for key in ("cropbox", "mediabox"):
+            entry = page_boxes.get(key)
+            if not isinstance(entry, Mapping):
+                continue
+            origin_candidate = _parse_origin(entry.get("origin"))
+            size_candidate = _parse_size(entry.get("size"))
+            candidates.append((size_candidate, origin_candidate))
+
+    def _sizes_match(size: Optional[tuple[float, float]]) -> bool:
+        if size is None or page_width is None or page_height is None:
+            return False
+        return math.isclose(size[0], page_width, abs_tol=0.01) and math.isclose(size[1], page_height, abs_tol=0.01)
+
+    for size_candidate, origin_candidate in candidates:
+        if origin_candidate is not None and _sizes_match(size_candidate):
+            origin = origin_candidate
+            break
+    if origin is None:
+        for _, origin_candidate in candidates:
+            if origin_candidate is not None:
+                origin = origin_candidate
+                break
+
+    return page_width, page_height, origin
+
+
 def _load_tables_payload(tables_json_path: Path) -> List[dict[str, Any]]:
     """Read and validate a json-coords payload."""
     with tables_json_path.open("r", encoding="utf-8") as fp:
@@ -3187,6 +3263,7 @@ def _resolve_pdf_bbox(
     page_rotation: int,
     page_width: float,
     page_height: float,
+    page_origin: Sequence[float] | None = None,
 ) -> tuple[float, float, float, float] | None:
     """Convert a Camelot bbox entry into PDF coordinates."""
 
@@ -3216,6 +3293,14 @@ def _resolve_pdf_bbox(
             )
         except (TypeError, ValueError):
             return None
+
+    origin_x = origin_y = 0.0
+    if page_origin is not None:
+        try:
+            origin_x = float(page_origin[0])
+            origin_y = float(page_origin[1])
+        except Exception:
+            origin_x = origin_y = 0.0
 
     rect: tuple[float, float, float, float] | None = None
     if isinstance(raw_bbox, dict):
@@ -3256,61 +3341,68 @@ def _resolve_pdf_bbox(
         rotation_value = 0
 
     x1, y1, x2, y2 = rect
+    x1 -= origin_x
+    y1 -= origin_y
+    x2 -= origin_x
+    y2 -= origin_y
     normalized = (
         min(x1, x2),
         min(y1, y2),
         max(x1, x2),
         max(y1, y2),
     )
-    if page_rotation == 180:
+    if page_rotation == 0:
+        normalized = (
+            min(x1, x2) + origin_x,
+            min(y1, y2) + origin_y,
+            max(x1, x2) + origin_x,
+            max(y1, y2) + origin_y,
+        )
+    elif page_rotation == 180:
         swapped_x = (page_width - normalized[0], page_width - normalized[2])
         swapped_y = (page_height - normalized[1], page_height - normalized[3])
         normalized = (
-            min(swapped_x),
-            min(swapped_y),
-            max(swapped_x),
-            max(swapped_y),
+            min(swapped_x) - origin_x,
+            min(swapped_y) - origin_y,
+            max(swapped_x) - origin_x,
+            max(swapped_y) - origin_y,
         )
-    if page_rotation == 90:
+    elif page_rotation == 90:
         swapped_x = (page_height - normalized[1], page_height - normalized[3])
         swapped_y = (normalized[0], normalized[2])
         normalized = (
-            min(swapped_x),
-            min(swapped_y),
-            max(swapped_x),
-            max(swapped_y),
+            min(swapped_x) - origin_y,
+            min(swapped_y) + origin_x,
+            max(swapped_x) - origin_y,
+            max(swapped_y) + origin_x,
         )
-    if page_rotation == 270:
+    elif page_rotation == 270:
         swapped_x = (normalized[1], normalized[3])
         swapped_y = (page_width - normalized[0], page_width - normalized[2])
         normalized = (
-            min(swapped_x),
-            min(swapped_y),
-            max(swapped_x),
-            max(swapped_y),
+            min(swapped_x) + origin_y,
+            min(swapped_y) - origin_x,
+            max(swapped_x) + origin_y,
+            max(swapped_y) - origin_x,
         )
     rotation_mod = int(rotation_value) % 360
     if (page_rotation in (0, 180)) and rotation_mod == 270:
         swapped_x = (normalized[0], normalized[2])
         swapped_y = (page_height - normalized[1], page_height - normalized[3])
-        return _expand(
-            (
-                min(swapped_x),
-                min(swapped_y),
-                max(swapped_x),
-                max(swapped_y),
-            )
+        normalized = (
+            min(swapped_x),
+            min(swapped_y),
+            max(swapped_x),
+            max(swapped_y),
         )
-    if (page_rotation in (90, 270)) and rotation_mod == 270:
+    elif (page_rotation in (90, 270)) and rotation_mod == 270:
         swapped_x = (page_height - normalized[0], page_height - normalized[2])
         swapped_y = (normalized[1], normalized[3])
-        return _expand(
-            (
-                min(swapped_x),
-                min(swapped_y),
-                max(swapped_x),
-                max(swapped_y),
-            )
+        normalized = (
+            min(swapped_x),
+            min(swapped_y),
+            max(swapped_x),
+            max(swapped_y),
         )
     return _expand(normalized)
 

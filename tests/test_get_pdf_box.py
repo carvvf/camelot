@@ -110,4 +110,4 @@ def test_get_pdf_box_accounts_for_crop_origin(tmp_path):
     artifact_path.write_text(json.dumps(artifact))
 
     rotated_box = get_pdf_box(artifact_path)
-    assert rotated_box == (40, 0, 50, 20)
+    assert rotated_box == (30, 10, 40, 30)

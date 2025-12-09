@@ -183,10 +183,10 @@ class Hybrid(BaseParser):
         table = parser._generate_table(table_idx, bbox, cols, rows, **kwargs)
         # Because hybrid can inject extraneous splits from both lattice and
         # network, remove lines / cols that are completely empty.
-        table.df = table.df.replace("", np.nan)
+        table.df = table.df.mask(table.df == "", np.nan)
         table.df = table.df.dropna(axis=0, how="all")
         table.df = table.df.dropna(axis=1, how="all")
-        table.df = table.df.replace(np.nan, "")
+        table.df = table.df.fillna("")
         table.shape = table.df.shape
         return table
 

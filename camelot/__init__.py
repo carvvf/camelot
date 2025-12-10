@@ -3,7 +3,6 @@ import logging
 from typing import Optional
 
 from .io import read_pdf
-from .plotting import PlotMethods
 
 
 def get_version() -> Optional[str]:
@@ -39,5 +38,12 @@ import warnings
 
 warnings.formatwarning = _camelot_formatwarning
 
-# instantiate plot method
-plot = PlotMethods()
+def __getattr__(name):
+    """Lazily load optional helpers to avoid importing heavy deps unless needed."""
+    if name == "plot":
+        from .plotting import PlotMethods  # deferred to avoid matplotlib import at init
+
+        plot_instance = PlotMethods()
+        globals()["plot"] = plot_instance
+        return plot_instance
+    raise AttributeError(name)
